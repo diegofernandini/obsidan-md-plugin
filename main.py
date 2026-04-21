@@ -2,6 +2,7 @@ import os
 from dotenv import load_dotenv
 from src.data_ingestor import DataIngestor
 from src.agent_manager import AgentManager
+from src.blueprint_engine import BlueprintEngine
 from typing import List
 from datetime import datetime
 import re
@@ -225,10 +226,10 @@ def main():
     print("="*80)
     
     while True:
-        mode = input("¿Modo de análisis: [P]DF local, [W]eb autónoma o [H]íbrido (Carpeta + Web)? (P/W/H): ").strip().upper()
-        if mode in ['P', 'W', 'H']:
+        mode = input("¿Modo de análisis: [P]DF local, [W]eb autónoma, [H]íbrido o [B]lueprints (Maestría)? (P/W/H/B): ").strip().upper()
+        if mode in ['P', 'W', 'H', 'B']:
             break
-        print("Por favor, ingrese 'P', 'W' o 'H'.")
+        print("Por favor, ingrese 'P', 'W', 'H' o 'B'.")
 
     # 2. EJECUCIÓN SEGÚN EL MODO
     if mode == 'H':
@@ -324,14 +325,38 @@ def main():
         if saved_path:
             print(f"\n💾 Informe web guardado exitosamente en: {saved_path}")
 
-        print("\n\n" + "="*80)
-        print("🧠 FUENTES SELECCIONADAS POR EL SISTEMA:")
-        if isinstance(sources, list) and sources:
-            for s in sources:
-                print(f"- {s['title']} ({s['source']}) -> {s['url']}")
         else:
             print("- Ninguna fuente web fue considerada lo suficientemente relevante.")
         print("="*80)
+
+    elif mode == 'B':
+        # --- MODO BLUEPRINTS (FASE 3) ---
+        print("\n" + "="*60)
+        print("   🔮 MODO: LABORATORIO DE IDEAS (Mastery Blueprints)")
+        print("="*60)
+        
+        engine = BlueprintEngine(model_name=MODEL_NAME)
+        
+        print("Elija un Blueprint:")
+        print("1. Roadmap de Investigación (Estado del Arte -> Brechas -> Propuesta)")
+        print("2. Matriz de Sinergias (Triangulación de múltiples conceptos)")
+        choice = input("Opción (1/2): ").strip()
+        
+        if choice == '1':
+            topic = input("Ingrese el TEMA para el Roadmap: ").strip()
+            if topic:
+                res = engine.run_research_roadmap(topic)
+                print("\n" + "="*80)
+                print(res['report'])
+                save_report(res['report'], res['transcript'], "BLUEPRINT_ROADMAP", topic)
+        elif choice == '2':
+            items = input("Ingrese los temas separados por coma (ej: IA, Agronomía, México): ").strip()
+            if items:
+                topic_list = [i.strip() for i in items.split(',')]
+                res = engine.run_synergy_matrix(topic_list)
+                print("\n" + "="*80)
+                print(res['report'])
+                save_report(res['report'], res['transcript'], "BLUEPRINT_SYNERGY", "_".join(topic_list))
 
 
 if __name__ == '__main__':

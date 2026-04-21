@@ -200,3 +200,25 @@ class AgentManager:
         """
 
         return self._run_agent_task(role, system_prompt, context_hybrid, task)
+
+    # --- PATRÓN 4: AGENTES DE MAESTRÍA (VISIÓN Y CRÍTICA) ---
+
+    def perform_critical_gap_analysis(self, context: str, topic: str) -> str:
+        """
+        Rol de 'Abogado del Diablo / Crítico Académico'.
+        Busca vacíos, contradicciones y áreas no exploradas.
+        """
+        role = "Analista de Brechas y Crítico Académico"
+        system_prompt = "Tu enfoque es detectar el 'silencio' en los datos. ¿Qué no se está diciendo? ¿Qué contradicciones existen? ¿En qué fallan las teorías actuales? Tu tono debe ser incisivo, serio y riguroso."
+        task = f"Analiza la siguiente base de conocimiento sobre '{topic}'. Tu misión es identificar 3 brechas críticas (vacíos de información o problemas no resueltos) y 2 contradicciones potenciales. IMPORTANTE: Responde en el idioma del tema solicitado."
+        return self._run_agent_task(role, system_prompt, context, task)
+
+    def propose_visionary_ideas(self, context: str, gaps: str, topic: str) -> str:
+        """
+        Rol de 'Visionario / Generativo'.
+        Propone hipótesis disruptivas y conexiones inesperadas.
+        """
+        role = "Visionario / Arquitecto de Innovación"
+        system_prompt = "Tu función es la extrapolación creativa. Tomas las brechas identificadas y propones soluciones 'fuera de la caja', analogías con otras industrias y modelos conceptuales nuevos. Tu tono debe ser inspirador, visionario y vanguardista."
+        task = f"Basándote en el contexto y las brechas identificadas ({gaps}), propón 3 hipótesis disruptivas o líneas de investigación futuras para '{topic}'. Usa analogías si es posible. IMPORTANTE: Responde en el idioma del tema solicitado."
+        return self._run_agent_task(role, system_prompt, context, task)
