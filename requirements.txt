@@ -10,3 +10,4 @@ numpy
 tiktoken
 sentence-transformers
 ollama
+docx2txt

@@ -1,5 +1,5 @@
-from typing import List, Optional
-from langchain_community.document_loaders import PyPDFLoader
+from typing import List, Optional, Dict
+from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
@@ -19,20 +19,44 @@ class DataIngestor:
         self.embeddings = HuggingFaceEmbeddings(model_name=embedding_model_name)
         self.vectorstore = None
         
-    def load_pdfs(self, file_path: str) -> List[str]:
+    def load_local_data(self, path: str) -> List[str]:
         """
-        Carga documentos de PDF y devuelve las cadenas de texto (chunks).
+        Carga documentos (PDF, DOCX, TXT, MD) de un archivo o carpeta.
         """
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"El archivo PDF no se encuentra en la ruta: {file_path}")
+        all_texts = []
+        if os.path.isfile(path):
+            file_paths = [path]
+        elif os.path.isdir(path):
+            # Buscar archivos con las extensiones soportadas
+            extensions = ('.pdf', '.docx', '.txt', '.md')
+            file_paths = [os.path.join(path, f) for f in os.listdir(path) if f.lower().endswith(extensions)]
+        else:
+            raise FileNotFoundError(f"La ruta no existe: {path}")
+
+        if not file_paths:
+            print(f"⚠️ No se encontraron archivos soportados en: {path}")
+            return []
+
+        for p in file_paths:
+            ext = os.path.splitext(p)[1].lower()
+            print(f"📄 Cargando {ext.upper()}: {p}...")
+            
+            try:
+                if ext == '.pdf':
+                    loader = PyPDFLoader(p)
+                elif ext == '.docx':
+                    loader = Docx2txtLoader(p)
+                elif ext in ['.txt', '.md']:
+                    loader = TextLoader(p, encoding='utf-8')
+                else:
+                    continue
+
+                documents = loader.load()
+                all_texts.extend([doc.page_content for doc in documents])
+            except Exception as e:
+                print(f"❌ Error al cargar {p}: {e}")
         
-        print(f"Cargando documentos PDF desde: {file_path}...")
-        loader = PyPDFLoader(file_path)
-        documents = loader.load()
-        
-        # Extraemos el texto
-        texts = [doc.page_content for doc in documents]
-        return texts
+        return all_texts
 
     def scrape_url(self, url: str) -> str:
         """
@@ -40,19 +64,29 @@ class DataIngestor:
         """
         print(f"🕸️ Intentando hacer Web Scraping en: {url}...")
         try:
-            # Si es un PDF de arxiv u otro sitio
             if url.endswith('.pdf') or 'arxiv.org/pdf' in url:
-                print(f"📄 Detectado PDF. Usando cargador de PDF para: {url}")
-                # Descargar temporalmente el PDF
-                temp_pdf = "temp_research_paper.pdf"
-                r = requests.get(url, stream=True, timeout=20)
-                with open(temp_pdf, 'wb') as f:
-                    f.write(r.content)
-                loader = PyPDFLoader(temp_pdf)
-                docs = loader.load()
-                text = "\n".join([doc.page_content for doc in docs])
-                os.remove(temp_pdf)
-                return f"*** CONTENIDO PDF ({url}) ***\n{text}"
+                print(f"📄 Detectado PDF. Procesando enlace: {url}")
+                
+                # Usar un archivo temporal seguro
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+                    temp_pdf_path = tmp_file.name
+                
+                try:
+                    r = requests.get(url, stream=True, timeout=20)
+                    # Verificar si realmente es un PDF
+                    if 'application/pdf' not in r.headers.get('Content-Type', '').lower():
+                        return f"[ERROR: La URL {url} no devolvió un PDF válido (Content-Type: {r.headers.get('Content-Type')})]"
+                        
+                    with open(temp_pdf_path, 'wb') as f:
+                        f.write(r.content)
+                    
+                    loader = PyPDFLoader(temp_pdf_path)
+                    docs = loader.load()
+                    text = "\n".join([doc.page_content for doc in docs])
+                    return f"*** CONTENIDO PDF ({url}) ***\n{text}"
+                finally:
+                    if os.path.exists(temp_pdf_path):
+                        os.remove(temp_pdf_path)
 
             # Intentar simular un navegador para evitar bloqueos sencillos
             headers = {
@@ -107,11 +141,11 @@ class DataIngestor:
 
     def search_academic(self, query: str, max_results: int = 5) -> List[dict]:
         """
-        Busca en la web general filtrando por dominios académicos.
+        Busca en la web filtrando por dominios confiables.
         """
-        # Filtros para dominios académicos
-        academic_query = f"{query} (site:edu OR site:org OR site:nature.com OR site:science.org OR site:scholar.google.com)"
-        print(f"🔎 Buscando fuentes académicas web: {query}...")
+        # Filtros un poco más flexibles pero orientados a calidad
+        academic_query = f"{query} (site:edu OR site:org OR site:nature.com OR site:ieee.org OR site:scholar.google.com)"
+        print(f"🔎 Buscando fuentes de alta calidad: {query}...")
         
         results = []
         try:
@@ -122,20 +156,45 @@ class DataIngestor:
                         "title": r['title'],
                         "summary": r['body'],
                         "url": r['href'],
-                        "source": "Web Académica"
+                        "source": "Web Académica/Org"
                     })
         except Exception as e:
             print(f"⚠️ Error en búsqueda académica DuckDuckGo: {e}")
             
         return results
 
-    def get_combined_research(self, query: str) -> List[dict]:
+    def search_general(self, query: str, max_results: int = 5) -> List[dict]:
         """
-        Combina resultados de arXiv y búsqueda académica general.
+        Busca en la web general sin filtros restrictivos (Contexto actual).
         """
-        arxiv_results = self.search_arxiv(query, max_results=2)
-        web_results = self.search_academic(query, max_results=3)
-        return arxiv_results + web_results
+        print(f"🔎 Buscando en la web general: {query}...")
+        results = []
+        try:
+            with DDGS() as ddgs:
+                ddgs_results = list(ddgs.text(query, max_results=max_results))
+                for r in ddgs_results:
+                    results.append({
+                        "title": r['title'],
+                        "summary": r['body'],
+                        "url": r['href'],
+                        "source": "Web General"
+                    })
+        except Exception as e:
+            print(f"⚠️ Error en búsqueda general DuckDuckGo: {e}")
+        return results
+
+    def get_combined_research(self, queries: Dict[str, str]) -> List[dict]:
+        """
+        Combina arXiv (EN),Académico (EN) y General (ORIG).
+        """
+        # 1. Academia Global (Inglés)
+        arxiv_results = self.search_arxiv(queries['en'], max_results=2)
+        academic_results = self.search_academic(queries['en'], max_results=2)
+        
+        # 2. Contexto General (Idioma Original)
+        general_results = self.search_general(queries['orig'], max_results=4)
+        
+        return arxiv_results + academic_results + general_results
 
 
     def index_data(self, texts: List[str], source_type: str, directory: str = "faiss_index") -> str:
@@ -159,7 +218,7 @@ class DataIngestor:
             chunk_overlap=200,
             separators=["\n\n", "\n", ". ", " ", ""]
         )
-        chunks = text_splitter.create_documents(texts, metadict={"source": source_type})
+        chunks = text_splitter.create_documents(texts, metadatas=[{"source": source_type}] * len(texts))
         
         # 2. Crear el vector store y guardarlo
         print(f"Creando índice vectorial FAISS con {len(chunks)} chunks...")

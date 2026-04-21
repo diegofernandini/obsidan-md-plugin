@@ -11,8 +11,9 @@ load_dotenv()
 
 # --- CONFIGURACIÓN GLOBAL ---
 PDF_DOCUMENT_PATH = "sample_banca_reporte.pdf" 
+DATA_SOURCES_DIR = "data_sources"
 INDEX_DIR = "faiss_index"
-MODEL_NAME = "llama2" # 🌟 Cambiado a un modelo local por defecto
+MODEL_NAME = "llama3.1" # 🌟 Actualizado a un modelo que tienes instalado (llama3.1)
 REPORTS_DIR = "reports"
 
 def save_report(content: str, metadata: str, mode: str, topic: str = "analysis") -> str:
@@ -54,7 +55,7 @@ def run_pdf_ingestion(file_path: str, index_dir: str):
     try:
         ingestor = DataIngestor()
         # 1. Cargar texto
-        texts = ingestor.load_pdfs(file_path)
+        texts = ingestor.load_local_data(file_path)
         
         if not texts:
             print("No se pudo extraer texto del documento. Verifique el archivo PDF.")
@@ -124,21 +125,32 @@ def run_web_analysis_pipeline(query: str):
     ingestor = DataIngestor()
     agent_manager = AgentManager(model_name=MODEL_NAME)
 
-    # 2. Búsqueda Automática
-    search_results = ingestor.get_combined_research(query)
+    # 2. Generar Queries Globales (Inglés + Idioma Original)
+    print(f"\n🌍 Paso 1: Generando estrategia de búsqueda global para '{query}'...")
+    queries = agent_manager.generate_search_queries(query)
+    
+    # 3. Búsqueda Global y General
+    print(f"\n🕸️ Paso 2: Realizando investigación web global y general...")
+    search_results = ingestor.get_combined_research(queries)
     if not search_results:
-        return "❌ No se encontraron fuentes relevantes para el tema proporcionado.", ""
+        return "❌ No se encontraron fuentes relevantes para el tema proporcionado.", []
 
-    # 3. Selección Autónoma de Fuentes (Agente Investigador)
+    # 4. Selección Autónoma de Fuentes (Agente Investigador)
+    print("\n🧐 Paso 3: Agente Investigador curando las mejores fuentes...")
     selected_sources = agent_manager.select_best_sources(search_results, query)
     
-    # 4. Scraping de las fuentes seleccionadas
+    if not selected_sources:
+        return "⚠️ El Investigador determinó que los resultados encontrados no son suficientemente pertinentes para este tema.", []
+
+    # 5. Scraping de las fuentes seleccionadas
+    print(f"\n📄 Paso 4: Extrayendo contenido de {len(selected_sources)} fuentes...")
     research_contents = []
     for source in selected_sources:
         content = ingestor.scrape_url(source['url'])
         research_contents.append(content)
 
-    # 5. Ejecutar el debate de contraste
+    # 6. Ejecutar el debate de contraste
+    print("\n🧠 Paso 5: Iniciando Debate de Contraste entre expertos...")
     if len(research_contents) >= 2:
         final_report = agent_manager.conduct_contrast_analysis(
             content_optimista=research_contents[0], 
@@ -146,10 +158,62 @@ def run_web_analysis_pipeline(query: str):
             task_context=query
         )
     else:
-        # Fallback si solo se pudo scrapear una fuente
-        final_report = f"⚠️ Solo se pudo extraer contenido de una fuente. Aquí el análisis parcial:\n{research_contents[0]}"
+        # Fallback si solo se pudo scrapear una fuente: Sintetizar en el idioma del usuario
+        print("\n📝 Paso 5: Sintetizando fuente única en el idioma del usuario...")
+        final_report = agent_manager.synthesize_report(
+            extracted_data=research_contents[0], 
+            task_context=query
+        )
     
     return final_report, selected_sources
+
+def run_hybrid_analysis_pipeline(topic: str, strategy: str):
+    """
+    Orquesta la investigación híbrida (Local Folder + Web Search).
+    """
+    print("\n" + "="*60)
+    print(f"       [ FASE 3 ] EJECUCIÓN DEL MODO HÍBRIDO PRO ({'COMPARATIVO' if strategy == 'C' else 'INTEGRADOR'})")
+    print("="*60)
+
+    ingestor = DataIngestor()
+    agent_manager = AgentManager(model_name=MODEL_NAME)
+
+    # 1. Ingesta de la carpeta local
+    print(f"\n📂 Paso 1: Indexando carpeta local '{DATA_SOURCES_DIR}'...")
+    local_texts = ingestor.load_local_data(DATA_SOURCES_DIR)
+    if local_texts:
+        ingestor.index_data(local_texts, "LOCAL_FOLDER", "hybrid_index")
+        retriever = ingestor.get_retriever()
+        
+        # Recuperar contexto local relevante para el tema
+        retrieved_docs = retriever.invoke(topic)
+        local_context = "\n".join([doc.page_content for doc in retrieved_docs])
+    else:
+        local_context = "[No se encontraron documentos locales relevantes en la carpeta.]"
+
+    # 2. Investigación Web Autónoma
+    print(f"\n🕸️ Paso 2: Realizando investigación web global y general...")
+    queries = agent_manager.generate_search_queries(topic)
+    search_results = ingestor.get_combined_research(queries)
+    selected_web_sources = agent_manager.select_best_sources(search_results, topic)
+    
+    web_contents = []
+    if selected_web_sources:
+        for source in selected_web_sources:
+            web_contents.append(ingestor.scrape_url(source['url']))
+    else:
+        print("⚠️ No se seleccionaron fuentes web relevantes. El análisis será puramente local.")
+
+    # 3. Análisis Híbrido Final (Contradicciones & Recomendación)
+    print("\n🧠 Paso 3: Agente Híbrido cruzando fuentes y resolviendo conflictos...")
+    final_report = agent_manager.conduct_hybrid_analysis(
+        local_context=local_context, 
+        web_contents=web_contents, 
+        strategy=strategy, 
+        topic=topic
+    )
+
+    return final_report, selected_web_sources
 
 def main():
     """
@@ -161,13 +225,51 @@ def main():
     print("="*80)
     
     while True:
-        mode = input("¿Desea analizar: [P]DF (Documentos Locales) o [W]EB (URLs en tiempo real)? (P/W): ").strip().upper()
-        if mode in ['P', 'W']:
+        mode = input("¿Modo de análisis: [P]DF local, [W]eb autónoma o [H]íbrido (Carpeta + Web)? (P/W/H): ").strip().upper()
+        if mode in ['P', 'W', 'H']:
             break
-        print("Por favor, ingrese 'P' para PDF o 'W' para Web.")
+        print("Por favor, ingrese 'P', 'W' o 'H'.")
 
     # 2. EJECUCIÓN SEGÚN EL MODO
-    if mode == 'P':
+    if mode == 'H':
+        # --- MODO HÍBRIDO (FASE 3) ---
+        print("\n" + "="*60)
+        print("   📂🔎 MODO: INVESTIGADOR HÍBRIDO PRO (Local Folder + Web)")
+        print("="*60)
+        
+        topic = input("Ingrese el TEMA para el análisis híbrido: ").strip()
+        while True:
+            strat = input("Elija el ENFOQUE: [C]omparativo o [I]ntegrador: ").strip().upper()
+            if strat in ['C', 'I']:
+                break
+            print("Elija 'C' o 'I'.")
+
+        if not topic:
+            print("\n❌ Fallo: Debe proporcionar un tema.")
+            return
+
+        final_report, sources = run_hybrid_analysis_pipeline(topic, strat)
+        
+        # --- MOSTRAR Y GUARDAR ---
+        print("\n" + "="*80)
+        print(f"✨ 📄🌐 INFORME HÍBRIDO FINAL ({'COMPARATIVO' if strat == 'C' else 'INTEGRADOR'}) ✨")
+        print("="*80)
+        print(final_report)
+        
+        meta_hybrid = f"--- ESTRATEGIA: {'Comparativa' if strat == 'C' else 'Integradora'} ---\n"
+        meta_hybrid += f"--- FUENTE LOCAL: Carpeta '{DATA_SOURCES_DIR}' ---\n"
+        meta_hybrid += "--- FUENTES WEB SELECCIONADAS ---\n"
+        if sources:
+            for s in sources:
+                meta_hybrid += f"- {s['title']} ({s['source']}) -> {s['url']}\n"
+        else:
+            meta_hybrid += "- No se seleccionaron fuentes web adicionales por falta de relevancia técnica.\n"
+        
+        saved_path = save_report(final_report, meta_hybrid, "HYBRID", topic)
+        if saved_path:
+            print(f"\n💾 Informe híbrido guardado exitosamente en: {saved_path}")
+
+    elif mode == 'P':
         # --- MODO PDF (FASE 1) ---
         retriever = run_pdf_ingestion(PDF_DOCUMENT_PATH, INDEX_DIR)
         if retriever:
@@ -210,18 +312,25 @@ def main():
         print(final_report)
         
         # --- GUARDAR REPORTE ---
-        meta_web = "--- 🧠 FUENTES SELECCIONADAS ---\n"
-        for s in sources:
-            meta_web += f"- {s['title']} ({s['source']}) -> {s['url']}\n"
+        meta_web = "--- MODO: Investigación Web Autónoma ---\n"
+        meta_web += "--- 🧠 FUENTES WEB SELECCIONADAS ---\n"
+        if isinstance(sources, list) and sources:
+            for s in sources:
+                meta_web += f"- {s['title']} ({s['source']}) -> {s['url']}\n"
+        else:
+            meta_web += "- No se seleccionaron fuentes web por falta de relevancia técnica.\n"
         
         saved_path = save_report(final_report, meta_web, "WEB", topic)
         if saved_path:
-            print(f"\n💾 Informe guardado exitosamente en: {saved_path}")
+            print(f"\n💾 Informe web guardado exitosamente en: {saved_path}")
 
         print("\n\n" + "="*80)
         print("🧠 FUENTES SELECCIONADAS POR EL SISTEMA:")
-        for s in sources:
-            print(f"- {s['title']} ({s['source']}) -> {s['url']}")
+        if isinstance(sources, list) and sources:
+            for s in sources:
+                print(f"- {s['title']} ({s['source']}) -> {s['url']}")
+        else:
+            print("- Ninguna fuente web fue considerada lo suficientemente relevante.")
         print("="*80)
 
 
