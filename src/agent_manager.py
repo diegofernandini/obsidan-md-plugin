@@ -18,8 +18,25 @@ class AgentManager:
             print("Asegúrate de que Ollama está corriendo en segundo plano y el modelo ('llama2' por defecto) ha sido descargado con 'ollama pull llama2'")
             self.llm = None
 
+    async def stream_agent_task(self, role: str, system_prompt: str, context: str, task: str):
+        """Generador asíncrono para streaming del LLM."""
+        if not self.llm:
+            yield "[FALLO: El motor LLM no está inicializado.]"
+            return
+
+        messages = [
+            SystemMessage(content=f"Eres un experto profesional con el rol de: {role}. Tu metodología es {system_prompt}. Mantén un tono analítico, profundo, y altamente estructurado."),
+            HumanMessage(content=f"\n\n[CONTEXTO RECUPERADO]:\n---{context}---\n\n[TAREA PRINCIPAL]:\n{task}")
+        ]
+        
+        try:
+            async for chunk in self.llm.astream(messages):
+                yield chunk.content
+        except Exception as e:
+            yield f"[ERROR en streaming: {e}]"
+
     def _run_agent_task(self, role: str, system_prompt: str, context: str, task: str) -> str:
-        """Ejecuta la llamada al LLM para un agente específico."""
+        """Ejecuta la llamada al LLM para un agente específico (Sincrónico)."""
         if not self.llm:
             return "[FALLO: El motor LLM no está inicializado. Revise la configuración de Ollama.]"
 
