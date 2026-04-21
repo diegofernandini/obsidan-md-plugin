@@ -1,0 +1,12 @@
+python-dotenv
+langchain
+langchain-community
+langchain-core
+openai # Mantenemos por compatibilidad en langchain, pero ya no lo usaremos explícitamente
+pypdf
+beautifulsoup4
+faiss-cpu
+numpy
+tiktoken
+sentence-transformers
+ollama
