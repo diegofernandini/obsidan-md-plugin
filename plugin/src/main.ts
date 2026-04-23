@@ -6,12 +6,20 @@ interface MIAISettings {
 	pythonPath: string;
 	serverPort: string;
 	modelName: string;
+	sharepointSite: string;
+	sharepointClientId: string;
+	sharepointClientSecret: string;
+	sharepointFolder: string;
 }
 
 const DEFAULT_SETTINGS: MIAISettings = {
 	pythonPath: '/Users/diegofernandiini/obsidan-md-plugin/venv/bin/python3',
 	serverPort: '8000',
-	modelName: 'llama3.1'
+	modelName: 'llama3.1',
+	sharepointSite: '',
+	sharepointClientId: '',
+	sharepointClientSecret: '',
+	sharepointFolder: ''
 }
 
 export default class MIAIBrainPlugin extends Plugin {
@@ -155,5 +163,32 @@ class MIAISettingTab extends PluginSettingTab {
 					this.plugin.stopServer();
 					this.plugin.startServer();
 				}));
+
+        containerEl.createEl('h3', { text: 'Configuración de SharePoint' });
+
+        new Setting(containerEl)
+            .setName('SharePoint Site URL')
+            .addText(text => text
+                .setValue(this.plugin.settings.sharepointSite)
+                .onChange(async (val) => { this.plugin.settings.sharepointSite = val; await this.plugin.saveSettings(); }));
+
+        new Setting(containerEl)
+            .setName('Client ID (Azure App)')
+            .addText(text => text
+                .setValue(this.plugin.settings.sharepointClientId)
+                .onChange(async (val) => { this.plugin.settings.sharepointClientId = val; await this.plugin.saveSettings(); }));
+
+        new Setting(containerEl)
+            .setName('Client Secret')
+            .addText(text => text
+                .setValue(this.plugin.settings.sharepointClientSecret)
+                .onChange(async (val) => { this.plugin.settings.sharepointClientSecret = val; await this.plugin.saveSettings(); }));
+
+        new Setting(containerEl)
+            .setName('Carpeta Relativa (Server-Relative URL)')
+            .setDesc('Ej: /sites/tusitio/Shared Documents/General')
+            .addText(text => text
+                .setValue(this.plugin.settings.sharepointFolder)
+                .onChange(async (val) => { this.plugin.settings.sharepointFolder = val; await this.plugin.saveSettings(); }));
 	}
 }

@@ -1,6 +1,6 @@
 from langchain_community.chat_models import ChatOllama
 from typing import List, Dict, Any
-from langchain.schema import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 
 class AgentManager:
     """
@@ -100,13 +100,16 @@ class AgentManager:
 
     def select_best_sources(self, search_results: List[Dict[str, Any]], task_context: str) -> List[Dict[str, Any]]:
         """
-        El Agente Investigador analiza los resultados y elije los relevantes. Puede rechazar todos.
+        El Agente Investigador analiza los resultados y elije los relevantes. 
         """
-        role = "Investigador / Curador de Contenido Científico"
-        system_prompt = """Eres un experto en bibliometría con tolerancia cero a la irrelevancia. 
-        Tu tarea es evaluar resultados de búsqueda y seleccionar los 2 mejores que tengan relación DIRECTA con el tema.
-        REGLA DE ORO: Si un resultado no tiene nada que ver con el tema (ej: asteroides cuando se busca banca), NO LO SELECCIONES. 
-        Si NINGÚN resultado es relevante, responde 'NONE'."""
+        if not search_results:
+            return []
+
+        role = "Investigador / Curador de Contenido"
+        system_prompt = """Eres un experto en análisis de información. 
+        Tu tarea es evaluar resultados de búsqueda y seleccionar los que tengan mayor relación con el tema.
+        Prioriza la calidad, pero si no hay fuentes perfectas, selecciona las mejores disponibles que aporten contexto útil. 
+        Responde SIEMPRE en el formato solicitado para que el sistema pueda procesarlo."""
         
         # Preparar la lista para el LLM
         formatted_list = ""
@@ -114,22 +117,22 @@ class AgentManager:
             formatted_list += f"\n[{i}] TÍTULO: {res['title']}\nRESUMEN: {res['summary']}\n"
 
         import re
-        task = f"Evalúa estos resultados para el tema: '{task_context}'. Responde indicando los índices elegidos en este formato EXACTO: [[índice1, índice2]] y luego tu justificación. Si no hay nada relevante responde [[NONE]]."
+        task = f"Evalúa estos resultados para el tema: '{task_context}'. Responde indicando los índices elegidos en este formato EXACTO: [[índice1, índice2]]. Si NINGUNO tiene sentido absoluto, responde [[NONE]]."
         
         selection_response = self._run_agent_task(role, system_prompt, "", task)
-        print(f"\n✅ Justificación del Investigador: {selection_response}")
+        print(f"\n✅ Análisis del Investigador: {selection_response}")
         
+        # Fallback de seguridad: Si hay resultados pero el AI dice NONE, tomamos los primeros
         if "[[NONE]]" in selection_response.upper():
-            return []
+            print("⚠️ El AI fue estricto, aplicando fallback para no perder el contexto...")
+            return [search_results[0]]
             
-        # Extraer bloques de índices usando regex: busca lo que esté dentro de [[ ]]
+        # Extraer bloques de índices usando regex
         match = re.search(r'\[\[(.*?)\]\]', selection_response)
         selected_indices = []
         if match:
-            # Dividir por comas por si el agente puso varios resultados
             parts = match.group(1).split(',')
             for part in parts:
-                # Buscar el primer número que aparezca en esta parte (el índice)
                 num_match = re.search(r'\d+', part)
                 if num_match:
                     try:
@@ -138,6 +141,10 @@ class AgentManager:
                             selected_indices.append(idx)
                     except:
                         continue
+        
+        # Si falló el regex pero el AI no dijo NONE, fallback al primero
+        if not selected_indices and search_results:
+            return [search_results[0]]
             
         return [search_results[i] for i in selected_indices[:2]]
 

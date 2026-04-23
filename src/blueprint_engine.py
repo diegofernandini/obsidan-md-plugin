@@ -6,16 +6,22 @@ class BlueprintEngine:
     """
     Orquesta flujos de trabajo multi-agente complejos (Blueprints).
     """
-    def __init__(self, model_name: str = "llama3.1"):
+    def __init__(self, model_name: str = "llama3.1", log_callback=None):
         self.agent_manager = AgentManager(model_name=model_name)
         self.ingestor = DataIngestor()
+        self.log_callback = log_callback
+
+    def _log(self, message: str):
+        print(message)
+        if self.log_callback:
+            self.log_callback(message)
 
     def run_research_roadmap(self, topic: str) -> Dict[str, Any]:
         """
         Blueprint: Roadmap de Investigación.
         Secuencia: Estado del Arte -> Crítica de Brechas -> Visión Futura.
         """
-        print(f"\n🚀 Iniciando Blueprint: ROADMAP DE INVESTIGACIÓN para '{topic}'")
+        self._log(f"\n🚀 Iniciando Blueprint: ROADMAP DE INVESTIGACIÓN para '{topic}'")
         
         # 0. Preparar registro de actividad (Transcript)
         log = []
@@ -23,7 +29,7 @@ class BlueprintEngine:
         log.append(f"Objetivo: {topic}")
 
         # 1. Obtener contexto global (Híbrido: Local + Web)
-        print("\n🌐 PASO 1: Recopilando base de conocimiento global...")
+        self._log("\n🌐 PASO 1: Recopilando base de conocimiento global...")
         log.append("Paso 1: Iniciando motor de búsqueda global (EN/ORIG).")
         queries = self.agent_manager.generate_search_queries(topic)
         web_results = self.ingestor.get_combined_research(queries)
@@ -44,7 +50,7 @@ class BlueprintEngine:
         combined_context = f"--- CONTEXTO LOCAL ---\n{local_context}\n\n--- CONTEXTO WEB ---\n" + "\n".join(web_contents)
 
         # 2. Estado del Arte (Sintetizador)
-        print("\n📚 PASO 2: Generando 'Estado del Arte' (Sintetizador)...")
+        self._log("\n📚 PASO 2: Generando 'Estado del Arte' (Sintetizador)...")
         state_of_the_art = self.agent_manager.synthesize_report(combined_context, topic)
         
         # Extraer una síntesis del log
@@ -52,7 +58,7 @@ class BlueprintEngine:
         log.append(f"Paso 2: Agente [Sintetizador] definió la tesis central: '{log_sintesis}'")
 
         # 3. Análisis de Brechas (Crítico)
-        print("\n⚖️ PASO 3: Identificando brechas y contradicciones (Crítico)...")
+        self._log("\n⚖️ PASO 3: Identificando brechas y contradicciones (Crítico)...")
         gaps = self.agent_manager.perform_critical_gap_analysis(combined_context, topic)
         
         # Extraer una síntesis del log
@@ -60,7 +66,7 @@ class BlueprintEngine:
         log.append(f"Paso 3: Agente [Crítico] detectó las siguientes brechas/vulnerabilidades: '{log_gaps}'")
 
         # 4. Propuesta Visionaria (Visionario)
-        print("\n🔭 PASO 4: Proyectando líneas de investigación futuras (Visionario)...")
+        self._log("\n🔭 PASO 4: Proyectando líneas de investigación futuras (Visionario)...")
         vision = self.agent_manager.propose_visionary_ideas(combined_context, gaps, topic)
         
         # Extraer una síntesis del log
@@ -91,7 +97,7 @@ class BlueprintEngine:
         Busca conexiones no obvias entre múltiples conceptos usando Web y Local.
         """
         combined_topics = " y ".join(topics)
-        print(f"\n🚀 Iniciando Blueprint: MATRIZ DE SINERGIAS HÍBRIDA para '{combined_topics}'")
+        self._log(f"\n🚀 Iniciando Blueprint: MATRIZ DE SINERGIAS HÍBRIDA para '{combined_topics}'")
         
         log = []
         log.append(f"--- INICIO DE BLUEPRINT: MATRIZ DE SINERGIAS HÍBRIDA ---")
@@ -108,7 +114,7 @@ class BlueprintEngine:
         # 1. Extraer esencia de cada concepto (Híbrido)
         essences = {}
         for t in topics:
-            print(f"🔍 Extrayendo esencia híbrida de: {t}...")
+            self._log(f"🔍 Extrayendo esencia híbrida de: {t}...")
             log.append(f"Paso 1: Agente [Detective] extrayendo esencia híbrida de '{t}'.")
             
             # A. Contexto Web
@@ -128,7 +134,7 @@ class BlueprintEngine:
             log.append(f"Paso 1: [Detective] extrajo esencia de '{t}': {essence[:100]}...")
 
         # 2. Agente Visionario busca sinergias
-        print("\n🔮 PASO 2: Agente Visionario trazando conexiones disruptivas...")
+        self._log("\n🔮 PASO 2: Agente Visionario trazando conexiones disruptivas...")
         context_all = "\n\n".join([f"CONCEPTO {k}:\n{v}" for k, v in essences.items()])
         synergies = self.agent_manager._run_agent_task(
             "Arquitecto de Sinergias",

@@ -21770,6 +21770,7 @@ var ChatComponent = ({ app, settings }) => {
   const [input, setInput] = React.useState("");
   const [isLoading, setIsLoading] = React.useState(false);
   const [currentAgent, setCurrentAgent] = React.useState("Detective / Agente Extractor");
+  const [currentMode, setCurrentMode] = React.useState("local");
   const scrollRef = React.useRef(null);
   React.useEffect(() => {
     if (scrollRef.current) {
@@ -21778,7 +21779,8 @@ var ChatComponent = ({ app, settings }) => {
   }, [messages]);
   const handleSend = async () => {
     if (!input.trim() || isLoading) return;
-    const userMsg = { role: "user", content: input };
+    const originalInput = input.trim();
+    const userMsg = { role: "user", content: originalInput };
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
     setIsLoading(true);
@@ -21790,15 +21792,26 @@ var ChatComponent = ({ app, settings }) => {
       if (activeFile instanceof import_obsidian.TFile) {
         noteContent = await app.vault.read(activeFile);
       }
-      const response = await fetch(`http://localhost:${settings.serverPort}/chat`, {
+      let endpoint = `http://localhost:${settings.serverPort}/chat`;
+      let body = {
+        message: originalInput,
+        vault_path: app.vault.adapter.getBasePath(),
+        active_note_content: noteContent,
+        agent_role: currentAgent,
+        mode: currentMode
+      };
+      if (originalInput.startsWith("/roadmap ")) {
+        endpoint = `http://localhost:${settings.serverPort}/blueprint/roadmap`;
+        body.message = originalInput.replace("/roadmap ", "");
+      } else if (originalInput.startsWith("/synergy ")) {
+        endpoint = `http://localhost:${settings.serverPort}/blueprint/synergy`;
+        const topics = originalInput.replace("/synergy ", "").split(",").map((s) => s.trim());
+        body = { topics, vault_path: app.vault.adapter.getBasePath() };
+      }
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: input,
-          vault_path: app.vault.adapter.getBasePath(),
-          active_note_content: noteContent,
-          agent_role: currentAgent
-        })
+        body: JSON.stringify(body)
       });
       if (!response.body) return;
       const reader = response.body.getReader();
@@ -21812,12 +21825,28 @@ var ChatComponent = ({ app, settings }) => {
         for (const line of lines) {
           if (line.startsWith("data: ")) {
             const data = line.slice(6);
-            fullContent += data;
-            setMessages((prev) => {
-              const newMsgs = [...prev];
-              newMsgs[newMsgs.length - 1].content = fullContent;
-              return newMsgs;
-            });
+            if (data.startsWith("LOG: ")) {
+              setMessages((prev) => {
+                const newMsgs = [...prev];
+                newMsgs[newMsgs.length - 1].content = `\u23F3 ${data.slice(5)}`;
+                return newMsgs;
+              });
+            } else if (data.startsWith("RESULT: ")) {
+              fullContent = data.slice(8);
+              setMessages((prev) => {
+                const newMsgs = [...prev];
+                newMsgs[newMsgs.length - 1].content = fullContent;
+                return newMsgs;
+              });
+            } else if (data.startsWith("TRANSCRIPT: ")) {
+            } else {
+              fullContent += data;
+              setMessages((prev) => {
+                const newMsgs = [...prev];
+                newMsgs[newMsgs.length - 1].content = fullContent;
+                return newMsgs;
+              });
+            }
           }
         }
       }
@@ -21837,21 +21866,73 @@ var ChatComponent = ({ app, settings }) => {
     await app.vault.create(fileName, content);
     app.workspace.openLinkText(fileName, "", true);
   };
-  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { display: "flex", flexDirection: "column", height: "100%", padding: "10px" }, children: [
-    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { marginBottom: "10px" }, children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
-      "select",
-      {
-        value: currentAgent,
-        onChange: (e) => setCurrentAgent(e.target.value),
-        style: { width: "100%", padding: "5px" },
-        children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "Detective / Agente Extractor", children: "\u{1F50D} Detective (Extracci\xF3n)" }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "Editor Jefe / Sintetizador", children: "\u270D\uFE0F Editor (S\xEDntesis)" }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "Analista Cr\xEDtico", children: "\u2696\uFE0F Cr\xEDtico (Gaps)" }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "Visionario", children: "\u{1F680} Visionario (Innovaci\xF3n)" })
-        ]
+  const handleSyncSharePoint = async () => {
+    setIsLoading(true);
+    try {
+      const response = await fetch(`http://localhost:${settings.serverPort}/sync-sharepoint`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          site_url: settings.sharepointSite,
+          client_id: settings.sharepointClientId,
+          client_secret: settings.sharepointClientSecret,
+          folder_url: settings.sharepointFolder
+        })
+      });
+      const data = await response.json();
+      if (data.status === "success") {
+        setMessages((prev) => [...prev, { role: "assistant", content: `\u2705 Sincronizaci\xF3n exitosa: ${data.files_synced} archivos indexados desde SharePoint.` }]);
+      } else {
+        setMessages((prev) => [...prev, { role: "assistant", content: `\u26A0\uFE0F Advertencia: ${data.detail || data.message}` }]);
       }
-    ) }),
+    } catch (err) {
+      setMessages((prev) => [...prev, { role: "assistant", content: "\u274C Error al conectar con SharePoint. Verifica tus credenciales en Ajustes." }]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { display: "flex", flexDirection: "column", height: "100%", padding: "10px" }, children: [
+    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { marginBottom: "10px", display: "flex", flexDirection: "column", gap: "5px" }, children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+        "select",
+        {
+          value: currentMode,
+          onChange: (e) => setCurrentMode(e.target.value),
+          style: { width: "100%", padding: "5px", fontWeight: "bold" },
+          children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "local", children: "\u{1F50D} Modo Local (Vault)" }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "web", children: "\u{1F30D} Modo Web (Scraper)" }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "hybrid", children: "\u{1F9EC} Modo H\xEDbrido (Pro)" }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "blueprint", children: "\u{1F52E} Blueprints (Slash Commands)" })
+          ]
+        }
+      ),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { display: "flex", gap: "5px" }, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+          "select",
+          {
+            value: currentAgent,
+            onChange: (e) => setCurrentAgent(e.target.value),
+            style: { flex: 1, padding: "5px" },
+            children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "Detective / Agente Extractor", children: "\u{1F50D} Detective (Extracci\xF3n)" }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "Editor Jefe / Sintetizador", children: "\u270D\uFE0F Editor (S\xEDntesis)" }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "Analista Cr\xEDtico", children: "\u2696\uFE0F Cr\xEDtico (Gaps)" }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "Visionario", children: "\u{1F680} Visionario (Innovaci\xF3n)" })
+            ]
+          }
+        ),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+          "button",
+          {
+            onClick: handleSyncSharePoint,
+            title: "Sincronizar SharePoint",
+            style: { padding: "5px 10px" },
+            children: "\u{1F504}"
+          }
+        )
+      ] })
+    ] }),
     /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
       "div",
       {
@@ -21883,6 +21964,26 @@ var ChatComponent = ({ app, settings }) => {
         ]
       }
     ),
+    currentMode === "blueprint" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: {
+      padding: "10px",
+      marginBottom: "10px",
+      fontSize: "0.8em",
+      background: "var(--background-secondary)",
+      border: "1px solid var(--interactive-accent)",
+      borderRadius: "4px"
+    }, children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "\u{1F52E} Comandos de Blueprint:" }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", { style: { margin: "5px 0", paddingLeft: "20px" }, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "/roadmap [tema]" }),
+          ": Investigaci\xF3n 360\xB0 (Estado del arte + Gaps + Visi\xF3n)."
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "/synergy [temas]" }),
+          ": Encuentra conexiones entre temas (ej: IA, Banca)."
+        ] })
+      ] })
+    ] }),
     /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { display: "flex", gap: "5px" }, children: [
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
         "input",
@@ -21891,7 +21992,7 @@ var ChatComponent = ({ app, settings }) => {
           value: input,
           onChange: (e) => setInput(e.target.value),
           onKeyDown: (e) => e.key === "Enter" && handleSend(),
-          placeholder: "Pregunta algo a tu Segundo Cerebro...",
+          placeholder: currentMode === "blueprint" ? "Escribe /roadmap o /synergy..." : "Pregunta algo a tu Segundo Cerebro...",
           style: { flex: 1 }
         }
       ),
@@ -21904,7 +22005,11 @@ var ChatComponent = ({ app, settings }) => {
 var DEFAULT_SETTINGS = {
   pythonPath: "/Users/diegofernandiini/obsidan-md-plugin/venv/bin/python3",
   serverPort: "8000",
-  modelName: "llama3.1"
+  modelName: "llama3.1",
+  sharepointSite: "",
+  sharepointClientId: "",
+  sharepointClientSecret: "",
+  sharepointFolder: ""
 };
 var MIAIBrainPlugin = class extends import_obsidian2.Plugin {
   constructor() {
@@ -21998,6 +22103,23 @@ var MIAISettingTab = class extends import_obsidian2.PluginSettingTab {
     new import_obsidian2.Setting(containerEl).setName("Reiniciar Servidor").setDesc("Detiene e inicia el servidor de nuevo para aplicar cambios.").addButton((btn) => btn.setButtonText("Reiniciar Now").onClick(() => {
       this.plugin.stopServer();
       this.plugin.startServer();
+    }));
+    containerEl.createEl("h3", { text: "Configuraci\xF3n de SharePoint" });
+    new import_obsidian2.Setting(containerEl).setName("SharePoint Site URL").addText((text) => text.setValue(this.plugin.settings.sharepointSite).onChange(async (val) => {
+      this.plugin.settings.sharepointSite = val;
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian2.Setting(containerEl).setName("Client ID (Azure App)").addText((text) => text.setValue(this.plugin.settings.sharepointClientId).onChange(async (val) => {
+      this.plugin.settings.sharepointClientId = val;
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian2.Setting(containerEl).setName("Client Secret").addText((text) => text.setValue(this.plugin.settings.sharepointClientSecret).onChange(async (val) => {
+      this.plugin.settings.sharepointClientSecret = val;
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian2.Setting(containerEl).setName("Carpeta Relativa (Server-Relative URL)").setDesc("Ej: /sites/tusitio/Shared Documents/General").addText((text) => text.setValue(this.plugin.settings.sharepointFolder).onChange(async (val) => {
+      this.plugin.settings.sharepointFolder = val;
+      await this.plugin.saveSettings();
     }));
   }
 };
