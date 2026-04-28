@@ -110,19 +110,44 @@ async def chat(chat_request: ChatRequest, request: Request):
     async def event_generator():
         loop = asyncio.get_running_loop()
         
+        # Función auxiliar para asegurar que el vault esté indexado
+        async def ensure_vault_indexed():
+            if chat_request.vault_path and ingestor.vectorstore is None:
+                yield {"data": "LOG: Construyendo Segunda Memoria (Indexando Vault por primera vez). Esto tomará un momento..."}
+                try:
+                    texts = await loop.run_in_executor(None, ingestor.load_local_data, chat_request.vault_path)
+                    if texts:
+                        await loop.run_in_executor(None, ingestor.index_data, texts, "VAULT", "vault_index")
+                        yield {"data": "LOG: Vault indexado correctamente."}
+                    else:
+                        yield {"data": "LOG: No se encontraron documentos válidos en el Vault."}
+                except Exception as e:
+                    print(f"Error indexando vault: {e}")
+                    yield {"data": f"LOG: Error al indexar el Vault: {e}"}
+
         # 1. MODO LOCAL (RAG Vault)
         if chat_request.mode == "local":
             context = ""
             if chat_request.vault_path:
                 try:
-                    retriever = ingestor.get_retriever()
-                    docs = retriever.invoke(chat_request.message)
-                    context = "\n".join([d.page_content for d in docs])
+                    async for msg in ensure_vault_indexed():
+                        yield msg
+                    if ingestor.vectorstore is not None:
+                        retriever = ingestor.get_retriever()
+                        docs = await loop.run_in_executor(None, retriever.invoke, chat_request.message)
+                        context_blocks = []
+                        for d in docs:
+                            source_file = d.metadata.get('source', 'Nota Local Desconocida')
+                            # Limpiar path, nos quedamos con el nombre del archivo
+                            basename = str(source_file).split('/')[-1]
+                            if basename.endswith('.md'): basename = basename[:-3]
+                            context_blocks.append(f"--- ARCHIVO ORIGEN: {basename} ---\n{d.page_content}")
+                        context = "\n\n".join(context_blocks)
                 except Exception as e:
                     print(f"Error recuperando contexto: {e}")
             
             if chat_request.active_note_content:
-                context += f"\n\n--- NOTA ACTIVA ---\n{chat_request.active_note_content}"
+                context += f"\n\n--- NOTA ACTIVA (Para Contexto/Edición) ---\n{chat_request.active_note_content}"
 
             system_prompt = "Eres un asistente de inteligencia de mercado."
             if "Detective" in chat_request.agent_role:
@@ -130,7 +155,9 @@ async def chat(chat_request: ChatRequest, request: Request):
             elif "Editor" in chat_request.agent_role:
                  system_prompt = "Tu función es dar cohesión y narrativa."
 
+            yield {"data": "LOG: Analizando el conexto local..."}
             async for chunk in agent_manager.stream_agent_task(chat_request.agent_role, system_prompt, context, chat_request.message):
+
                 if await request.is_disconnected(): break
                 yield {"data": chunk}
 
@@ -166,11 +193,23 @@ async def chat(chat_request: ChatRequest, request: Request):
 
         # 3. MODO HÍBRIDO (Vault + Web)
         elif chat_request.mode == "hybrid":
-            yield {"data": "LOG: Indexando memoria local (Vault)..."}
-            # Recuperar contexto del Vault (todo el vault)
-            retriever = ingestor.get_retriever()
-            local_docs = await loop.run_in_executor(None, retriever.invoke, chat_request.message)
-            local_context = "\n".join([d.page_content for d in local_docs])
+            yield {"data": "LOG: Validando memoria local (Vault)..."}
+            local_context = ""
+            try:
+                async for msg in ensure_vault_indexed():
+                    yield msg
+                if ingestor.vectorstore is not None:
+                    retriever = ingestor.get_retriever()
+                    local_docs = await loop.run_in_executor(None, retriever.invoke, chat_request.message)
+                    context_blocks = []
+                    for d in local_docs:
+                        source_file = d.metadata.get('source', 'Nota Local Desconocida')
+                        basename = str(source_file).split('/')[-1]
+                        if basename.endswith('.md'): basename = basename[:-3]
+                        context_blocks.append(f"--- ARCHIVO ORIGEN: {basename} ---\n{d.page_content}")
+                    local_context = "\n\n".join(context_blocks)
+            except Exception as e:
+                print(f"Error recuperando contexto híbrido: {e}")
 
             yield {"data": "LOG: Lanzando investigación web complementaria..."}
             queries = agent_manager.generate_search_queries(chat_request.message)
@@ -184,6 +223,13 @@ async def chat(chat_request: ChatRequest, request: Request):
 
             yield {"data": "LOG: Agente Híbrido resolviendo conflictos y sintetizando..."}
             report = await loop.run_in_executor(None, agent_manager.conduct_hybrid_analysis, local_context, web_contents, "I", chat_request.message)
+            
+            # Post-procesamiento estricto: Eliminar alucinaciones del formato por defecto de Llama
+            report = report.replace("[Fuente interna]", "")
+            report = report.replace("[Fuente externa]", "")
+            report = report.replace("[Fuente Externa]", "")
+            report = report.replace("[Fuente Interna]", "")
+
             yield {"data": f"RESULT: {report}"}
 
     return EventSourceResponse(event_generator())
@@ -247,6 +293,29 @@ async def blueprint_synergy(request: Request):
                 continue
         
         result = await executor_task
+        yield {"data": f"RESULT: {result['report']}"}
+@app.post("/blueprint/organize")
+async def blueprint_organize(request: ChatRequest, fastapi_request: Request):
+    async def event_generator():
+        queue = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        def log_to_queue(msg):
+            loop.call_soon_threadsafe(queue.put_nowait, msg)
+
+        engine = BlueprintEngine(model_name=MODEL_NAME, log_callback=log_to_queue)
+
+        # Ejecutar blueprint en un hilo separado con solo vault_path (modo incremental)
+        executor_task = loop.run_in_executor(None, engine.run_batch_organize, request.vault_path)
+
+        while not executor_task.done() or not queue.empty():
+            try:
+                msg = await asyncio.wait_for(queue.get(), timeout=0.1)
+                yield {"data": msg}
+            except asyncio.TimeoutError:
+                continue
+
+        result = executor_task.result()
         yield {"data": f"RESULT: {result['report']}"}
 
     return EventSourceResponse(event_generator())

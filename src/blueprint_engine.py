@@ -1,6 +1,8 @@
 from typing import List, Dict, Any
 from src.agent_manager import AgentManager
 from src.data_ingestor import DataIngestor
+import os
+import re
 
 class BlueprintEngine:
     """
@@ -154,5 +156,220 @@ class BlueprintEngine:
 """
         return {
             "report": full_report,
+            "transcript": "\n".join(log)
+        }
+
+    def run_batch_organize(self, vault_path: str) -> Dict[str, Any]:
+        """
+        Blueprint: Organizador Incremental de Bóveda.
+        Escanea el vault completo, salta archivos que ya tienen YAML frontmatter,
+        y organiza solo los nuevos. Salida en [vault]/Organizados/
+        """
+        self._log(f"\n🚀 Iniciando Blueprint: ORGANIZADOR INCREMENTAL DEL VAULT")
+        log = []
+
+        if not vault_path:
+            self._log("❌ LOG: Error: No se proporcionó vault_path.")
+            return {"report": "Fallo: Vault Path no proveído.", "transcript": "\n".join(log)}
+
+        # Carpeta de salida en la raíz del vault
+        organized_dir = os.path.join(vault_path, "Organizados")
+        os.makedirs(organized_dir, exist_ok=True)
+
+        # Escanear TODOS los .md del vault (recursivo), excluyendo la propia carpeta Organizados
+        all_md = []
+        for root, dirs, files in os.walk(vault_path):
+            # Excluir carpetas del sistema y la propia salida
+            dirs[:] = [d for d in dirs if d not in ['.obsidian', '.git', 'Organizados', 'MI-AI Reports']]
+            for f in files:
+                if f.lower().endswith('.md'):
+                    all_md.append(os.path.join(root, f))
+
+        if not all_md:
+            self._log("⚠️ LOG: No se encontraron archivos .md en el vault.")
+            return {"report": "Sin archivos Markdown en el vault.", "transcript": "\n".join(log)}
+
+        # Filtro incremental: saltar archivos que ya tienen frontmatter YAML
+        def has_frontmatter(path: str) -> bool:
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    first_line = f.readline().strip()
+                return first_line == '---'
+            except:
+                return False
+
+        pending = [f for f in all_md if not has_frontmatter(f)]
+        skipped = len(all_md) - len(pending)
+
+        self._log(f"LOG: 📊 {len(all_md)} notas en el vault. {skipped} ya organizadas (saltadas). {len(pending)} pendientes.")
+
+        if not pending:
+            return {
+                "report": f"✅ Todas las {len(all_md)} notas ya tienen frontmatter YAML. No hay nada nuevo que organizar.",
+                "transcript": "\n".join(log)
+            }
+
+        # --- Indexar el vault completo para visión sistémica (wikilinks reales) ---
+        self._log("LOG: 🧠 Indexando vault para contexto sistémico...")
+        vault_texts = self.ingestor.load_local_data(vault_path)
+        retriever = None
+        if vault_texts:
+            self.ingestor.index_data(vault_texts, "LOCAL", "batch_organize_index")
+            retriever = self.ingestor.get_retriever()
+            self._log(f"LOG: ✅ Vault indexado. {len(vault_texts)} documentos en contexto.")
+
+        system_prompt = """Eres el Arquitecto de Bóveda de Obsidian. Tu misión es reestructurar notas añadiendo:
+1. YAML frontmatter con tags descriptivos y metadatos relevantes.
+2. Wikilinks [[Nota Relacionada]] cuando detectes referencias a otras notas del vault.
+3. Formato Markdown limpio manteniendo TODO el contenido original sin omitir nada.
+REGLA ABSOLUTA: Retorna ÚNICAMENTE el contenido Markdown final. Sin bloques de código envolventes (```), sin explicaciones, sin saludos."""
+
+        processed = 0
+        for i, file_path in enumerate(pending):
+            filename = os.path.basename(file_path)
+            self._log(f"LOG: ⏳ [{i + 1}/{len(pending)}] {filename}...")
+
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+
+                # Recuperar notas relacionadas del vault para contexto sistémico
+                vault_context = ""
+                if retriever:
+                    related_docs = retriever.invoke(content[:500])
+                    context_blocks = []
+                    for d in related_docs:
+                        source = d.metadata.get('source', '')
+                        basename = os.path.basename(str(source)).replace('.md', '')
+                        if basename != filename.replace('.md', ''):
+                            context_blocks.append(f"[[{basename}]]: {d.page_content[:200]}")
+                    vault_context = "\n".join(context_blocks)
+
+                task = f"""Organiza la siguiente nota. Añade Frontmatter YAML con tags relevantes. 
+Usa Wikilinks [[NombreNota]] si detectas referencias a las siguientes notas del vault:
+{vault_context if vault_context else "No hay contexto adicional."}
+
+NOTA A ORGANIZAR:
+{content}"""
+
+                response = self.agent_manager._run_agent_task("Arquitecto", system_prompt, "", task)
+
+                # Limpieza defensiva
+                for prefix in ["```markdown\n", "```md\n", "```\n"]:
+                    if response.startswith(prefix):
+                        response = response[len(prefix):]
+                if response.endswith("```"):
+                    response = response[:-3]
+                response = response.strip()
+
+                # Guardar con ruta relativa preservada dentro de Organizados/
+                rel_path = os.path.relpath(file_path, vault_path)
+                out_path = os.path.join(organized_dir, rel_path)
+                os.makedirs(os.path.dirname(out_path), exist_ok=True)
+                with open(out_path, "w", encoding="utf-8") as out_f:
+                    out_f.write(response)
+
+                processed += 1
+                self._log(f"LOG: ✅ {filename} listo.")
+
+            except Exception as e:
+                self._log(f"LOG: ❌ Error en {filename}: {str(e)}")
+
+        summary = (
+            f"🎉 Organización incremental completada.\n"
+            f"- Procesadas: **{processed}** notas nuevas\n"
+            f"- Saltadas (ya organizadas): **{skipped}**\n"
+            f"- Revisa los resultados en la carpeta `Organizados/` de tu vault."
+        )
+        self._log(f"LOG: {summary}")
+        return {"report": summary, "transcript": "\n".join(log)}
+
+
+        # --- PASO 1: Indexar el VAULT COMPLETO para visión sistémica ---
+        self._log(f"LOG: 🧠 Indexando vault completo para visión sistémica...")
+        vault_texts = self.ingestor.load_local_data(vault_path)
+        retriever = None
+        if vault_texts:
+            self.ingestor.index_data(vault_texts, "LOCAL", "batch_organize_index")
+            retriever = self.ingestor.get_retriever()
+            self._log(f"LOG: ✅ Vault indexado. {len(vault_texts)} archivos en contexto.")
+        else:
+            self._log("LOG: ⚠️ No se encontraron documentos en el vault para indexar.")
+
+        # Crear carpeta de destino (sobreescribe si ya existe)
+        organized_dir = os.path.join(abspathtarget, "Organizados")
+        os.makedirs(organized_dir, exist_ok=True)
+
+        # Enlistar MDs en la carpeta objetivo
+        md_files = [f for f in os.listdir(abspathtarget)
+                    if f.lower().endswith('.md') and os.path.isfile(os.path.join(abspathtarget, f))]
+
+        if not md_files:
+            self._log(f"⚠️ LOG: No se encontraron archivos .md en '{target_folder}'.")
+            return {"report": f"Sin archivos para organizar en '{target_folder}'.", "transcript": "\n".join(log)}
+
+        self._log(f"LOG: 📂 {len(md_files)} archivos encontrados para organizar.")
+
+        system_prompt = """Eres el Arquitecto de Bóveda de Obsidian. Tu misión es reestructurar notas añadiendo:
+1. YAML frontmatter con tags descriptivos y metadatos.
+2. Wikilinks [[Nota Relacionada]] cuando el contexto de otras notas del vault sea relevante.
+3. Formato Markdown limpio y profesional manteniendo todo el contenido original.
+REGLA ABSOLUTA: Retorna ÚNICAMENTE el contenido Markdown final. Sin bloques de código envolventes, sin explicaciones, sin saludos."""
+
+        processed = 0
+        for i, filename in enumerate(md_files):
+            file_path = os.path.join(abspathtarget, filename)
+            self._log(f"LOG: ⏳ [{i + 1}/{len(md_files)}] Organizando: {filename}...")
+
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+
+                # --- PASO 2: Recuperar notas relacionadas del vault para contexto sistémico ---
+                vault_context = ""
+                if retriever:
+                    related_docs = retriever.invoke(content[:500])  # usar inicio del archivo como query
+                    context_blocks = []
+                    for d in related_docs:
+                        source = d.metadata.get('source', '')
+                        basename = os.path.basename(str(source)).replace('.md', '')
+                        if basename != filename.replace('.md', ''):  # excluir el mismo archivo
+                            context_blocks.append(f"--- NOTA RELACIONADA EN VAULT: [[{basename}]] ---\n{d.page_content[:300]}")
+                    vault_context = "\n\n".join(context_blocks)
+
+                task = f"""Reconfigura profesionalmente el siguiente archivo para Obsidian.
+Añade Frontmatter YAML con tags relevantes. Usa Wikilinks [[NombreNota]] cuando detectes referencias a las notas relacionadas del vault.
+
+NOTAS RELACIONADAS EN EL VAULT (para crear wikilinks reales):
+{vault_context if vault_context else "No se encontraron notas relacionadas."}
+
+CONTENIDO DEL ARCHIVO A ORGANIZAR:
+{content}"""
+
+                response = self.agent_manager._run_agent_task("Arquitecto", system_prompt, "", task)
+
+                # Limpieza defensiva de bloques de código
+                for prefix in ["```markdown\n", "```md\n", "```\n"]:
+                    if response.startswith(prefix):
+                        response = response[len(prefix):]
+                if response.endswith("```"):
+                    response = response[:-3]
+                response = response.strip()
+
+                # Sobreescribir si ya existe (comportamiento inteligente)
+                out_path = os.path.join(organized_dir, filename)
+                with open(out_path, "w", encoding="utf-8") as out_f:
+                    out_f.write(response)
+
+                processed += 1
+                self._log(f"LOG: ✅ {filename} listo.")
+            except Exception as e:
+                self._log(f"LOG: ❌ Error en {filename}: {str(e)}")
+
+        summary = f"🎉 Batch finalizado: {processed}/{len(md_files)} archivos organizados en '{target_folder}/Organizados/'. Re-ejecutar el comando actualiza los archivos existentes."
+        self._log(f"LOG: {summary}")
+        log.append("--- FIN DE BLUEPRINT BATCH ---")
+        return {
+            "report": summary,
             "transcript": "\n".join(log)
         }

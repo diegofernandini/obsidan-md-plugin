@@ -1,4 +1,4 @@
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
@@ -19,9 +19,9 @@ class DataIngestor:
         self.embeddings = HuggingFaceEmbeddings(model_name=embedding_model_name)
         self.vectorstore = None
         
-    def load_local_data(self, path: str) -> List[str]:
+    def load_local_data(self, path: str) -> List[Dict[str, str]]:
         """
-        Carga documentos (PDF, DOCX, TXT, MD) de un archivo o carpeta.
+        Carga documentos (PDF, DOCX, TXT, MD) de un archivo o carpeta extrayendo el contenido y el nombre del archivo.
         """
         all_texts = []
         if os.path.isfile(path):
@@ -39,7 +39,8 @@ class DataIngestor:
 
         for p in file_paths:
             ext = os.path.splitext(p)[1].lower()
-            print(f"📄 Cargando {ext.upper()}: {p}...")
+            filename = os.path.basename(p)
+            print(f"📄 Cargando {ext.upper()}: {filename}...")
             
             try:
                 if ext == '.pdf':
@@ -52,7 +53,8 @@ class DataIngestor:
                     continue
 
                 documents = loader.load()
-                all_texts.extend([doc.page_content for doc in documents])
+                for doc in documents:
+                    all_texts.append({"text": doc.page_content, "source": filename})
             except Exception as e:
                 print(f"❌ Error al cargar {p}: {e}")
         
@@ -197,12 +199,12 @@ class DataIngestor:
         return arxiv_results + academic_results + general_results
 
 
-    def index_data(self, texts: List[str], source_type: str, directory: str = "faiss_index") -> str:
+    def index_data(self, texts: List[Any], source_type: str, directory: str = "faiss_index") -> str:
         """
         Divide el texto (de PDF o Web) y crea un índice FAISS.
         
         Args:
-            texts: Lista de fragmentos de texto.
+            texts: Lista de fragmentos de texto (strings) o diccionarios con 'text' y 'source'.
             source_type: Tipo de fuente ('PDF' o 'WEB').
             directory: Directorio donde se guardará el índice.
             
@@ -218,7 +220,20 @@ class DataIngestor:
             chunk_overlap=200,
             separators=["\n\n", "\n", ". ", " ", ""]
         )
-        chunks = text_splitter.create_documents(texts, metadatas=[{"source": source_type}] * len(texts))
+        
+        chunks = []
+        for x in texts:
+            if isinstance(x, dict):
+                content = x.get('text', '')
+                meta = {"source": x.get('source', source_type), "type": source_type}
+            else:
+                content = x
+                meta = {"source": source_type, "type": source_type}
+                
+            if content.strip():
+                doc_chunks = text_splitter.create_documents([content], metadatas=[meta])
+                chunks.extend(doc_chunks)
+
         
         # 2. Crear el vector store y guardarlo
         print(f"Creando índice vectorial FAISS con {len(chunks)} chunks...")

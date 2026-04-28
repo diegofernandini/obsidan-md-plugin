@@ -23,9 +23,11 @@ class AgentManager:
         if not self.llm:
             yield "[FALLO: El motor LLM no está inicializado.]"
             return
+            
+        obsidian_rules = "\n\nREGLA: Usa sintaxis de Obsidian: crea etiquetas (#tag) para conceptos, wikilinks ([[término]]) para entidades o nombres concretos y Callouts (> [!info] o > [!warning]) para advertencias."
 
         messages = [
-            SystemMessage(content=f"Eres un experto profesional con el rol de: {role}. Tu metodología es {system_prompt}. Mantén un tono analítico, profundo, y altamente estructurado."),
+            SystemMessage(content=f"Eres un experto profesional con el rol de: {role}. Tu metodología es {system_prompt}. Responde con párrafos fluidos y usa listas solo si es necesario.{obsidian_rules}"),
             HumanMessage(content=f"\n\n[CONTEXTO RECUPERADO]:\n---{context}---\n\n[TAREA PRINCIPAL]:\n{task}")
         ]
         
@@ -40,8 +42,10 @@ class AgentManager:
         if not self.llm:
             return "[FALLO: El motor LLM no está inicializado. Revise la configuración de Ollama.]"
 
+        obsidian_rules = "\n\nREGLA: Usa sintaxis de Obsidian: crea etiquetas (#tag) para conceptos, wikilinks ([[término]]) para entidades o nombres concretos y Callouts (> [!info] o > [!warning]) para advertencias."
+
         messages = [
-            SystemMessage(content=f"Eres un experto profesional con el rol de: {role}. Tu metodología es {system_prompt}. Mantén un tono analítico, profundo, y altamente estructurado."),
+            SystemMessage(content=f"Eres un experto profesional con el rol de: {role}. Tu metodología es {system_prompt}. Responde con párrafos fluidos y usa listas solo si es necesario.{obsidian_rules}"),
             HumanMessage(content=f"\n\n[CONTEXTO RECUPERADO]:\n---{context}---\n\n[TAREA PRINCIPAL]:\n{task}")
         ]
         
@@ -62,8 +66,8 @@ class AgentManager:
         Busca patrones y extrae datos estructurados del contexto.
         """
         role = "Detective / Agente Extractor de Patrones"
-        system_prompt = "Tu enfoque es forense. No interpretas; extraes. Debes identificar cifras, fechas, términos clave, nombres de regulaciones y relaciones causa-efecto explícitas. Presenta los hallazgos en listas, viñetas o tablas. Tu salida debe ser un material de soporte para la síntesis, no un artículo final."
-        task = f"Analiza el siguiente contexto de documentos. Tu misión es extraer, en detalle y sin interpretación, toda la información clave relacionada con el objetivo: '{task_context}'. Indica de forma estructurada los datos y patrones más relevantes."
+        system_prompt = "Tu enfoque es forense. No interpretas; extraes. Debes identificar cifras, fechas, términos clave y relaciones causa-efecto. Presenta la información de forma fluida y legible, usando párrafos y listas de forma equilibrada."
+        task = f"Analiza el siguiente contexto. Extrae la información clave relacionada con: '{task_context}'. Responde con claridad."
         return self._run_agent_task(role, system_prompt, context, task)
 
     def synthesize_report(self, extracted_data: str, task_context: str) -> str:
@@ -210,8 +214,11 @@ class AgentManager:
         1. Resuelve conflictos entre fuentes explicando por qué ocurren.
         2. Analiza oportunidades de cada postura.
         3. Da una RECOMENDACIÓN FINAL accionable.
-        4. Cita siempre: [Fuente Interna] o [Fuente Externa/Web].
-        5. IMPORTANTE: Responde SIEMPRE en el mismo idioma en que se te ha planteado el tema ('{topic}').
+        4. NUNCA uses frases genéricas como "[Fuente interna]" o "[Fuente externa]".
+        5. Cita SIEMPRE usando la sintaxis exacta de Obsidian. 
+           - Si la info viene de una URL, usa el formato: [Texto](URL)
+           - Si la info viene de un archivo local, usa WIKILINKS: [[Nombre_del_Archivo]]
+        6. IMPORTANTE: Responde SIEMPRE en el mismo idioma en que se te ha planteado el tema ('{topic}').
         """
 
         combined_web = "\n\n".join(web_contents)

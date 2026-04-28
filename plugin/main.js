@@ -21765,26 +21765,57 @@ var ChatView = class extends import_obsidian.ItemView {
     (_a = this.root) == null ? void 0 : _a.unmount();
   }
 };
+var MarkdownContent = ({ content, app }) => {
+  const containerRef = React.useRef(null);
+  React.useEffect(() => {
+    if (containerRef.current) {
+      containerRef.current.empty();
+      import_obsidian.MarkdownRenderer.renderMarkdown(
+        content,
+        containerRef.current,
+        "",
+        null
+      );
+    }
+  }, [content]);
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { ref: containerRef, className: "markdown-rendered-message", style: {
+    fontSize: "14px",
+    lineHeight: "1.5",
+    width: "100%",
+    display: "block"
+  } });
+};
 var ChatComponent = ({ app, settings }) => {
   const [messages, setMessages] = React.useState([]);
   const [input, setInput] = React.useState("");
   const [isLoading, setIsLoading] = React.useState(false);
   const [currentAgent, setCurrentAgent] = React.useState("Detective / Agente Extractor");
   const [currentMode, setCurrentMode] = React.useState("local");
+  const [autoScroll, setAutoScroll] = React.useState(true);
   const scrollRef = React.useRef(null);
+  const handleScroll = (e) => {
+    const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
+    const isAtBottom = scrollHeight - scrollTop - clientHeight < 50;
+    setAutoScroll(isAtBottom);
+  };
   React.useEffect(() => {
-    if (scrollRef.current) {
+    if (autoScroll && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages]);
+  }, [messages, autoScroll]);
   const handleSend = async () => {
+    var _a;
     if (!input.trim() || isLoading) return;
     const originalInput = input.trim();
     const userMsg = { role: "user", content: originalInput };
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
     setIsLoading(true);
-    const assistantMsg = { role: "assistant", content: "", agent: currentAgent };
+    const assistantMsg = {
+      role: "assistant",
+      content: "",
+      agent: originalInput.startsWith("/organize") ? "\u{1F3D7}\uFE0F Arquitecto de B\xF3veda" : originalInput.startsWith("/roadmap ") ? "\u{1F5FA}\uFE0F Roadmap Blueprint" : originalInput.startsWith("/synergy ") ? "\u{1F52E} Sinergia Blueprint" : currentAgent
+    };
     setMessages((prev) => [...prev, assistantMsg]);
     try {
       const activeFile = app.workspace.getActiveFile();
@@ -21807,6 +21838,8 @@ var ChatComponent = ({ app, settings }) => {
         endpoint = `http://localhost:${settings.serverPort}/blueprint/synergy`;
         const topics = originalInput.replace("/synergy ", "").split(",").map((s) => s.trim());
         body = { topics, vault_path: app.vault.adapter.getBasePath() };
+      } else if (originalInput === "/organize") {
+        endpoint = `http://localhost:${settings.serverPort}/blueprint/organize`;
       }
       const response = await fetch(endpoint, {
         method: "POST",
@@ -21814,38 +21847,63 @@ var ChatComponent = ({ app, settings }) => {
         body: JSON.stringify(body)
       });
       if (!response.body) return;
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
       let fullContent = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = decoder.decode(value);
-        const lines = chunk.split("\n");
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            const data = line.slice(6);
-            if (data.startsWith("LOG: ")) {
-              setMessages((prev) => {
-                const newMsgs = [...prev];
-                newMsgs[newMsgs.length - 1].content = `\u23F3 ${data.slice(5)}`;
-                return newMsgs;
-              });
-            } else if (data.startsWith("RESULT: ")) {
-              fullContent = data.slice(8);
-              setMessages((prev) => {
-                const newMsgs = [...prev];
-                newMsgs[newMsgs.length - 1].content = fullContent;
-                return newMsgs;
-              });
-            } else if (data.startsWith("TRANSCRIPT: ")) {
-            } else {
-              fullContent += data;
-              setMessages((prev) => {
-                const newMsgs = [...prev];
-                newMsgs[newMsgs.length - 1].content = fullContent;
-                return newMsgs;
-              });
+      const reader = (_a = response.body) == null ? void 0 : _a.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let currentEventData = [];
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+          for (let rawLine of lines) {
+            rawLine = rawLine.replace(/\r$/, "");
+            if (rawLine.startsWith("data:")) {
+              const dataContent = rawLine.startsWith("data: ") ? rawLine.slice(6) : rawLine.slice(5);
+              currentEventData.push(dataContent);
+            } else if (rawLine === "") {
+              if (currentEventData.length > 0) {
+                const eventString = currentEventData.join("\n");
+                currentEventData = [];
+                if (eventString === "[DONE]") break;
+                if (eventString.startsWith("LOG: ")) {
+                  const logText = eventString.slice(5);
+                  setMessages((prev) => {
+                    const newMsgs = [...prev];
+                    if (newMsgs.length > 0) {
+                      const lastMsg = newMsgs[newMsgs.length - 1];
+                      if (!lastMsg.content.includes("<!-- RESULT_LOADED -->")) {
+                        const newContent = (lastMsg.content ? lastMsg.content + "\n" : "") + `> ${logText.trim()}`;
+                        newMsgs[newMsgs.length - 1] = { ...lastMsg, content: newContent };
+                      }
+                    }
+                    return newMsgs;
+                  });
+                } else if (eventString.startsWith("RESULT: ")) {
+                  const resText = eventString.slice(8);
+                  setMessages((prev) => {
+                    const newMsgs = [...prev];
+                    if (newMsgs.length > 0) {
+                      const lastMsg = newMsgs[newMsgs.length - 1];
+                      newMsgs[newMsgs.length - 1] = { ...lastMsg, content: resText + "<!-- RESULT_LOADED -->" };
+                    }
+                    return newMsgs;
+                  });
+                } else if (!eventString.startsWith("TRANSCRIPT: ")) {
+                  setMessages((prev) => {
+                    const newMsgs = [...prev];
+                    if (newMsgs.length > 0) {
+                      const lastMsg = newMsgs[newMsgs.length - 1];
+                      const newContent = lastMsg.content + eventString;
+                      newMsgs[newMsgs.length - 1] = { ...lastMsg, content: newContent };
+                    }
+                    return newMsgs;
+                  });
+                }
+              }
             }
           }
         }
@@ -21859,6 +21917,11 @@ var ChatComponent = ({ app, settings }) => {
     } finally {
       setIsLoading(false);
     }
+  };
+  const handleNewChat = () => {
+    if (isLoading) return;
+    setMessages([]);
+    setInput("");
   };
   const handleSaveToNote = async (content) => {
     const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
@@ -21891,112 +21954,379 @@ var ChatComponent = ({ app, settings }) => {
       setIsLoading(false);
     }
   };
-  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { display: "flex", flexDirection: "column", height: "100%", padding: "10px" }, children: [
-    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { marginBottom: "10px", display: "flex", flexDirection: "column", gap: "5px" }, children: [
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("style", { children: `
+                .dot-flashing {
+                  position: relative;
+                  width: 6px;
+                  height: 6px;
+                  border-radius: 5px;
+                  background-color: var(--text-muted);
+                  color: var(--text-muted);
+                  animation: dotFlashing 1s infinite linear alternate;
+                  animation-delay: .5s;
+                }
+                .dot-flashing::before, .dot-flashing::after {
+                  content: '';
+                  display: inline-block;
+                  position: absolute;
+                  top: 0;
+                }
+                .dot-flashing::before {
+                  left: -12px;
+                  width: 6px;
+                  height: 6px;
+                  border-radius: 5px;
+                  background-color: var(--text-muted);
+                  color: var(--text-muted);
+                  animation: dotFlashing 1s infinite alternate;
+                  animation-delay: 0s;
+                }
+                .dot-flashing::after {
+                  left: 12px;
+                  width: 6px;
+                  height: 6px;
+                  border-radius: 5px;
+                  background-color: var(--text-muted);
+                  color: var(--text-muted);
+                  animation: dotFlashing 1s infinite alternate;
+                  animation-delay: 1s;
+                }
+                @keyframes dotFlashing {
+                  0% { background-color: var(--text-muted); }
+                  50%, 100% { background-color: rgba(var(--text-muted-rgb), 0.2); }
+                }
+                .markdown-rendered-message {
+                  width: 100% !important;
+                  font-size: 13px !important;
+                  line-height: 1.45 !important;
+                  word-break: normal !important;
+                  overflow-wrap: break-word !important;
+                }
+                .markdown-rendered-message p { margin-bottom: 0.6em; }
+                .markdown-rendered-message p:last-child { margin-bottom: 0; }
+                .markdown-rendered-message h1, .markdown-rendered-message h2, .markdown-rendered-message h3 {
+                  margin: 1em 0 0.5em 0;
+                  color: var(--text-accent);
+                  font-weight: 600;
+                  line-height: 1.3;
+                }
+                .markdown-rendered-message h1 { font-size: 1.15em; }
+                .markdown-rendered-message h2 { font-size: 1.05em; }
+                .markdown-rendered-message h3 { font-size: 1em; }
+                .markdown-rendered-message ul, .markdown-rendered-message ol {
+                  padding-left: 1.2em;
+                  margin: 0.6em 0;
+                }
+                .markdown-rendered-message li { margin: 0.3em 0; }
+                .markdown-rendered-message strong { color: var(--text-normal); font-weight: 600; }
+                .markdown-rendered-message blockquote {
+                  border-left: 2px solid var(--interactive-accent);
+                  margin: 0.6em 0;
+                  padding-left: 0.8em;
+                  color: var(--text-muted);
+                }
+                ` }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: {
+      display: "flex",
+      flexDirection: "column",
+      height: "100%",
+      width: "100%",
+      padding: "10px",
+      background: "var(--background-primary)",
+      color: "var(--text-normal)",
+      fontFamily: "var(--font-interface)",
+      fontSize: "13px",
+      boxSizing: "border-box"
+    }, children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: {
+        marginBottom: "12px",
+        display: "flex",
+        flexDirection: "column",
+        gap: "6px",
+        padding: "0 4px"
+      }, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }, children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: { fontSize: "0.8em", fontWeight: "bold", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }, children: "MI-AI Intelligence" }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+            "button",
+            {
+              onClick: handleNewChat,
+              title: "Nueva conversaci\xF3n",
+              className: "mod-subtle",
+              style: {
+                background: "var(--background-modifier-border)",
+                border: "1px solid var(--background-modifier-border)",
+                cursor: "pointer",
+                fontSize: "0.85em",
+                padding: "4px 10px",
+                borderRadius: "4px",
+                display: "flex",
+                alignItems: "center",
+                gap: "4px",
+                color: "var(--text-normal)",
+                fontWeight: "500",
+                boxShadow: "none",
+                transition: "all 0.2s ease"
+              },
+              onMouseOver: (e) => {
+                e.currentTarget.style.background = "rgba(123, 97, 255, 0.15)";
+                e.currentTarget.style.borderColor = "rgba(123, 97, 255, 0.3)";
+                e.currentTarget.style.boxShadow = "0 1px 4px rgba(0,0,0,0.1)";
+              },
+              onMouseOut: (e) => {
+                e.currentTarget.style.background = "var(--background-modifier-border)";
+                e.currentTarget.style.borderColor = "var(--background-modifier-border)";
+                e.currentTarget.style.boxShadow = "none";
+              },
+              children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "+ Nuevo" })
+            }
+          )
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { display: "flex", flexDirection: "column", gap: "4px" }, children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+            "select",
+            {
+              className: "dropdown",
+              value: currentMode,
+              onChange: (e) => setCurrentMode(e.target.value),
+              style: {
+                width: "100%",
+                padding: "4px 8px",
+                borderRadius: "4px",
+                border: "1px solid var(--background-modifier-border)",
+                background: "var(--background-primary)",
+                color: "var(--text-normal)",
+                fontSize: "0.9em",
+                boxShadow: "none",
+                cursor: "pointer"
+              },
+              children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "local", children: "Modo Local (Vault)" }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "web", children: "Modo Web (Scraper)" }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "hybrid", children: "Modo H\xEDbrido (Pro)" }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "blueprint", children: "Blueprints (Commands)" })
+              ]
+            }
+          ),
+          currentMode === "local" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+            "select",
+            {
+              className: "dropdown",
+              value: currentAgent,
+              onChange: (e) => setCurrentAgent(e.target.value),
+              style: {
+                width: "100%",
+                padding: "4px 8px",
+                borderRadius: "4px",
+                border: "1px solid var(--background-modifier-border)",
+                background: "var(--background-primary)",
+                color: "var(--text-normal)",
+                fontSize: "0.9em",
+                boxShadow: "none",
+                cursor: "pointer"
+              },
+              children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "Detective / Agente Extractor", children: "\u{1F50D} Detective (Extracci\xF3n)" }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "Editor / Agente Sintetizador", children: "\u270D\uFE0F Editor (S\xEDntesis)" }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "Cr\xEDtico / Abogado del Diablo", children: "\u2696\uFE0F Cr\xEDtico (Brechas)" }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "Visionario / Innovador", children: "\u{1F4A1} Visionario (Disrupci\xF3n)" })
+              ]
+            }
+          )
+        ] })
+      ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("style", { children: `
+                .markdown-rendered-message {
+                    width: 100% !important;
+                    min-width: 0 !important;
+                }
+                .markdown-rendered-message blockquote {
+                    margin: 8px 0 !important;
+                    padding: 4px 0 4px 12px !important;
+                    border-left: 2px solid var(--interactive-accent) !important;
+                    width: auto !important;
+                    max-width: 100% !important;
+                }
+                /* Estilo especial para los logs del Arquitecto */
+                .markdown-rendered-message p {
+                    margin: 4px 0 !important;
+                    width: 100% !important;
+                    white-space: pre-wrap !important;
+                    word-wrap: break-word !important;
+                }
+            ` }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
-        "select",
+        "div",
         {
-          value: currentMode,
-          onChange: (e) => setCurrentMode(e.target.value),
-          style: { width: "100%", padding: "5px", fontWeight: "bold" },
+          ref: scrollRef,
+          onScroll: handleScroll,
+          style: {
+            flex: 1,
+            overflowY: "auto",
+            width: "100%",
+            marginBottom: "10px",
+            border: "1px solid var(--background-modifier-border)",
+            padding: "10px",
+            borderRadius: "4px",
+            background: "var(--background-primary-alt)",
+            display: "flex",
+            flexDirection: "column",
+            gap: "15px",
+            boxSizing: "border-box"
+          },
           children: [
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "local", children: "\u{1F50D} Modo Local (Vault)" }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "web", children: "\u{1F30D} Modo Web (Scraper)" }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "hybrid", children: "\u{1F9EC} Modo H\xEDbrido (Pro)" }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "blueprint", children: "\u{1F52E} Blueprints (Slash Commands)" })
+            messages.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: {
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              height: "100%",
+              color: "var(--text-muted)",
+              opacity: 0.6,
+              textAlign: "center",
+              padding: "20px"
+            }, children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { fontSize: "2.5em", marginBottom: "15px" }, children: [
+                currentMode === "local" && currentAgent.includes("Detective") && "\u{1F50D}",
+                currentMode === "local" && currentAgent.includes("Editor") && "\u270D\uFE0F",
+                currentMode === "local" && currentAgent.includes("Cr\xEDtico") && "\u2696\uFE0F",
+                currentMode === "local" && currentAgent.includes("Visionario") && "\u{1F4A1}",
+                currentMode === "web" && "\u{1F310}",
+                currentMode === "hybrid" && "\u{1F91D}",
+                currentMode === "blueprint" && "\u{1F5FA}\uFE0F"
+              ] }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", { style: { margin: "0 0 10px 0", color: "var(--text-normal)" }, children: currentMode === "local" ? "Interrogatorio Local" : currentMode === "web" ? "Investigaci\xF3n Aut\xF3noma" : currentMode === "hybrid" ? "An\xE1lisis H\xEDbrido 360" : "Ejecuci\xF3n Multi-Agente" }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { style: { fontSize: "0.9em", maxWidth: "80%" }, children: [
+                currentMode === "local" && currentAgent.includes("Detective") && "Extraer\xE9 datos y hechos precisos desde el contexto de tus notas locales sin interpretaci\xF3n.",
+                currentMode === "local" && currentAgent.includes("Editor") && "Tomar\xE9 tus notas y redactar\xE9 un nuevo resumen ejecutivo coherente y con narrativa.",
+                currentMode === "local" && currentAgent.includes("Cr\xEDtico") && "Buscar\xE9 brechas de informaci\xF3n t\xE9cnica y contradicciones ocultas en tus recortes.",
+                currentMode === "local" && currentAgent.includes("Visionario") && "Proyectar\xE9 el futuro y propondr\xE9 innovaciones disruptivas usando de base tus notas.",
+                currentMode === "web" && "Saldr\xE9 a internet, buscar\xE9 fuentes, extraer\xE9 contexto de las mejores y simular\xE9 un debate interno para darte la respuesta m\xE1s rica.",
+                currentMode === "hybrid" && "Revisar\xE9 tus notas locales y si detecto vac\xEDos saldr\xE9 a internet para comparar y complementar la informaci\xF3n con datos externos.",
+                currentMode === "blueprint" && "Orquestar\xE9 un escuadr\xF3n pre-programado. Comandos: '/roadmap [tema]', '/synergy [temas]', o '/organize [Ruta_Carpeta]'."
+              ] })
+            ] }),
+            messages.map((m, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: {
+              width: "100%",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: m.role === "user" ? "flex-end" : "stretch"
+            }, children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: {
+                fontWeight: "600",
+                fontSize: "11px",
+                color: "var(--text-muted)",
+                marginBottom: "4px",
+                textTransform: "uppercase",
+                padding: "0 4px",
+                textAlign: m.role === "user" ? "right" : "left"
+              }, children: m.role === "user" ? "T\xFA" : m.agent || "Asistente" }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: {
+                padding: "12px 16px",
+                borderRadius: "8px",
+                background: m.role === "user" ? "var(--interactive-accent)" : "var(--background-secondary)",
+                color: m.role === "user" ? "white" : "var(--text-normal)",
+                maxWidth: m.role === "user" ? "80%" : "100%",
+                minWidth: "50px",
+                border: m.role === "user" ? "none" : "1px solid var(--background-modifier-border)",
+                boxShadow: "0 1px 2px rgba(0,0,0,0.05)",
+                display: "block",
+                boxSizing: "border-box"
+              }, children: m.role === "user" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { whiteSpace: "pre-wrap", textAlign: "left", fontSize: "14px", lineHeight: "1.5" }, children: m.content }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MarkdownContent, { content: m.content, app }) }),
+              m.role === "assistant" && m.content.length > 50 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { marginTop: "6px", textAlign: "left" }, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                "button",
+                {
+                  onClick: () => handleSaveToNote(m.content),
+                  className: "mod-subtle",
+                  style: {
+                    fontSize: "10px",
+                    padding: "4px 8px",
+                    borderRadius: "4px",
+                    background: "transparent",
+                    color: "var(--text-muted)",
+                    cursor: "pointer",
+                    border: "1px solid var(--background-modifier-border)"
+                  },
+                  children: "\u{1F4BE} Guardar nota"
+                }
+              ) })
+            ] }, i)),
+            isLoading && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { display: "flex", gap: "15px", alignItems: "center", color: "var(--text-muted)", fontSize: "0.8em", padding: "5px" }, children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dot-flashing" }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "MI-AI analizando..." })
+            ] })
           ]
         }
       ),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { display: "flex", gap: "5px" }, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
-          "select",
+      currentMode === "blueprint" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: {
+        padding: "10px",
+        marginBottom: "10px",
+        fontSize: "0.8em",
+        background: "var(--background-secondary)",
+        borderLeft: "2px solid var(--interactive-accent)",
+        borderRadius: "4px",
+        color: "var(--text-muted)"
+      }, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "\u{1F52E} Blueprints:" }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", { style: { margin: "4px 0", paddingLeft: "16px" }, children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "/roadmap [tema]" }) }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "/synergy [tema1, tema2]" }) }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "/organize" }),
+            " \u2014 organiza todo el vault (incremental)"
+          ] })
+        ] })
+      ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: {
+        display: "flex",
+        alignItems: "center",
+        gap: "6px",
+        background: "var(--background-secondary)",
+        padding: "4px 4px 4px 10px",
+        borderRadius: "6px",
+        border: "1px solid var(--background-modifier-border)"
+      }, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+          "input",
           {
-            value: currentAgent,
-            onChange: (e) => setCurrentAgent(e.target.value),
-            style: { flex: 1, padding: "5px" },
-            children: [
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "Detective / Agente Extractor", children: "\u{1F50D} Detective (Extracci\xF3n)" }),
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "Editor Jefe / Sintetizador", children: "\u270D\uFE0F Editor (S\xEDntesis)" }),
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "Analista Cr\xEDtico", children: "\u2696\uFE0F Cr\xEDtico (Gaps)" }),
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "Visionario", children: "\u{1F680} Visionario (Innovaci\xF3n)" })
-            ]
+            type: "text",
+            value: input,
+            onChange: (e) => setInput(e.target.value),
+            onKeyDown: (e) => e.key === "Enter" && handleSend(),
+            placeholder: "...",
+            style: {
+              flex: 1,
+              background: "transparent",
+              border: "none",
+              boxShadow: "none",
+              padding: "6px 0",
+              color: "var(--text-normal)",
+              fontSize: "0.95em",
+              minWidth: "50px"
+            }
           }
         ),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
           "button",
           {
-            onClick: handleSyncSharePoint,
-            title: "Sincronizar SharePoint",
-            style: { padding: "5px 10px" },
-            children: "\u{1F504}"
+            onClick: handleSend,
+            disabled: isLoading || !input.trim(),
+            style: {
+              padding: "6px 12px",
+              background: input.trim() ? "var(--interactive-accent)" : "transparent",
+              color: input.trim() ? "white" : "var(--text-muted)",
+              border: "none",
+              borderRadius: "4px",
+              cursor: input.trim() ? "pointer" : "default",
+              fontWeight: "600",
+              fontSize: "0.85em",
+              flexShrink: 0
+            },
+            children: "Enviar"
           }
         )
       ] })
-    ] }),
-    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
-      "div",
-      {
-        ref: scrollRef,
-        style: { flex: 1, overflowY: "auto", marginBottom: "10px", border: "1px solid var(--background-modifier-border)", padding: "10px", borderRadius: "4px" },
-        children: [
-          messages.map((m, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { marginBottom: "15px", textAlign: m.role === "user" ? "right" : "left" }, children: [
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { fontWeight: "bold", fontSize: "0.8em", color: "var(--text-muted)" }, children: m.role === "user" ? "T\xFA" : `MI-AI (${m.agent || "Asistente"})` }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: {
-              display: "inline-block",
-              padding: "8px 12px",
-              borderRadius: "10px",
-              background: m.role === "user" ? "var(--interactive-accent)" : "var(--background-secondary)",
-              color: m.role === "user" ? "white" : "var(--text-normal)",
-              maxWidth: "90%",
-              whiteSpace: "pre-wrap",
-              textAlign: "left"
-            }, children: m.content }),
-            m.role === "assistant" && m.content.length > 50 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { marginTop: "5px" }, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-              "button",
-              {
-                onClick: () => handleSaveToNote(m.content),
-                style: { fontSize: "0.7em", padding: "2px 6px" },
-                children: "\u{1F4BE} Guardar como nota"
-              }
-            ) })
-          ] }, i)),
-          isLoading && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { fontSize: "0.8em", fontStyle: "italic" }, children: "Escribiendo..." })
-        ]
-      }
-    ),
-    currentMode === "blueprint" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: {
-      padding: "10px",
-      marginBottom: "10px",
-      fontSize: "0.8em",
-      background: "var(--background-secondary)",
-      border: "1px solid var(--interactive-accent)",
-      borderRadius: "4px"
-    }, children: [
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "\u{1F52E} Comandos de Blueprint:" }),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", { style: { margin: "5px 0", paddingLeft: "20px" }, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "/roadmap [tema]" }),
-          ": Investigaci\xF3n 360\xB0 (Estado del arte + Gaps + Visi\xF3n)."
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "/synergy [temas]" }),
-          ": Encuentra conexiones entre temas (ej: IA, Banca)."
-        ] })
-      ] })
-    ] }),
-    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { display: "flex", gap: "5px" }, children: [
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-        "input",
-        {
-          type: "text",
-          value: input,
-          onChange: (e) => setInput(e.target.value),
-          onKeyDown: (e) => e.key === "Enter" && handleSend(),
-          placeholder: currentMode === "blueprint" ? "Escribe /roadmap o /synergy..." : "Pregunta algo a tu Segundo Cerebro...",
-          style: { flex: 1 }
-        }
-      ),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { onClick: handleSend, disabled: isLoading, children: "Enviar" })
     ] })
   ] });
 };
