@@ -43,6 +43,17 @@ async def save_to_vault(vault_path: str, title: str, content: str):
         f.write(content)
     print(f"Reporte guardado en: {file_path}")
 
+import logging
+import traceback
+
+# Configurar log de emergencia
+logging.basicConfig(
+    filename="MIAI_DEBUG.log",
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logging.info("--- SERVIDOR MI-AI INICIADO ---")
+
 class ChatRequest(BaseModel):
     message: str
     vault_path: Optional[str] = None
@@ -109,9 +120,9 @@ async def sync_sharepoint(request: SharePointRequest):
 async def chat(chat_request: ChatRequest, request: Request):
     async def event_generator():
         loop = asyncio.get_running_loop()
-        
-        # Función auxiliar para asegurar que el vault esté indexado
-        async def ensure_vault_indexed():
+        try:
+            # Función auxiliar para asegurar que el vault esté indexado
+            async def ensure_vault_indexed():
             if chat_request.vault_path and ingestor.vectorstore is None:
                 yield {"data": "LOG: Construyendo Segunda Memoria (Indexando Vault por primera vez). Esto tomará un momento..."}
                 try:
@@ -125,8 +136,8 @@ async def chat(chat_request: ChatRequest, request: Request):
                     print(f"Error indexando vault: {e}")
                     yield {"data": f"LOG: Error al indexar el Vault: {e}"}
 
-        # 1. MODO LOCAL (RAG Vault)
-        if chat_request.mode == "local":
+            # 1. MODO LOCAL (RAG Vault)
+            if chat_request.mode == "local":
             context = ""
             if chat_request.vault_path:
                 try:
@@ -149,20 +160,20 @@ async def chat(chat_request: ChatRequest, request: Request):
             if chat_request.active_note_content:
                 context += f"\n\n--- NOTA ACTIVA (Para Contexto/Edición) ---\n{chat_request.active_note_content}"
 
-            system_prompt = "Eres un asistente de inteligencia de mercado."
+            system_prompt = "Eres un asistente de inteligencia de mercado experto. SIEMPRE debes citar tus fuentes usando el formato [[Nombre de la Nota]] para archivos locales y [Título](URL) para enlaces web. Al final de tu respuesta, incluye siempre una sección de '## Bibliografía'."
             if "Detective" in chat_request.agent_role:
-                 system_prompt = "Tu enfoque es forense. No interpretas; extraes."
+                 system_prompt = "Tu enfoque es forense. No interpretas; extraes datos puros y citas SIEMPRE el origen usando [[Wikilinks]]. Incluye bibliografía final."
             elif "Editor" in chat_request.agent_role:
-                 system_prompt = "Tu función es dar cohesión y narrativa."
+                 system_prompt = "Tu función es dar cohesión y narrativa. Estructuras reportes profesionales e incluyes SIEMPRE una sección de '## Bibliografía' al final detallando las fuentes."
 
-            yield {"data": "LOG: Analizando el conexto local..."}
+            yield {"data": "LOG: Analizando el contexto local..."}
             async for chunk in agent_manager.stream_agent_task(chat_request.agent_role, system_prompt, context, chat_request.message):
 
                 if await request.is_disconnected(): break
                 yield {"data": chunk}
 
-        # 2. MODO WEB (Investigador Autónomo)
-        elif chat_request.mode == "web":
+            # 2. MODO WEB (Investigador Autónomo)
+            elif chat_request.mode == "web":
             yield {"data": "LOG: Generando estrategia de búsqueda global..."}
             queries = agent_manager.generate_search_queries(chat_request.message)
             
@@ -189,10 +200,11 @@ async def chat(chat_request: ChatRequest, request: Request):
             else:
                 report = await loop.run_in_executor(None, agent_manager.synthesize_report, research_contents[0], chat_request.message)
             
-            yield {"data": f"RESULT: {report}"}
+            bibliography = "\n\n## Bibliografía\n" + "\n".join([f"- [{s.get('title', 'Fuente Web')}]({s['url']})" for s in selected_sources])
+            yield {"data": f"RESULT: {report}{bibliography}"}
 
-        # 3. MODO HÍBRIDO (Vault + Web)
-        elif chat_request.mode == "hybrid":
+            # 3. MODO HÍBRIDO (Vault + Web)
+            elif chat_request.mode == "hybrid":
             yield {"data": "LOG: Validando memoria local (Vault)..."}
             local_context = ""
             try:
@@ -230,7 +242,13 @@ async def chat(chat_request: ChatRequest, request: Request):
             report = report.replace("[Fuente Externa]", "")
             report = report.replace("[Fuente Interna]", "")
 
-            yield {"data": f"RESULT: {report}"}
+            bibliography = "\n\n## Bibliografía\n" + "\n".join([f"- [{s.get('title', 'Fuente Web')}]({s['url']})" for s in selected_web])
+            yield {"data": f"RESULT: {report}{bibliography}"}
+        except Exception as e:
+            error_trace = traceback.format_exc()
+            logging.error(f"ERROR EN CHAT ({chat_request.mode}): {str(e)}\n{error_trace}")
+            yield {"data": f"LOG: ❌ Error crítico en chat (Ver log): {str(e)}"}
+            yield {"data": f"RESULT: Ocurrió un error. Consulta MIAI_DEBUG.log para más detalles."}
 
     return EventSourceResponse(event_generator())
 
@@ -245,25 +263,39 @@ async def blueprint_roadmap(request: ChatRequest, fastapi_request: Request):
             # Usamos el loop capturado para enviar el mensaje a la cola de forma segura
             loop.call_soon_threadsafe(queue.put_nowait, msg)
 
-        engine = BlueprintEngine(model_name=MODEL_NAME, log_callback=log_to_queue)
-
+        try:
+            engine = BlueprintEngine(model_name=MODEL_NAME, log_callback=log_to_queue)
+            yield {"data": "LOG: 🧠 Motor MI-AI Sincronizado. Iniciando Roadmap..."}
+        
+        vault_path = request.vault_path
         # Ejecutar blueprint en un hilo separado
-        executor_task = loop.run_in_executor(None, engine.run_research_roadmap, request.message)
+        executor_task = loop.run_in_executor(None, engine.run_research_roadmap, request.message, vault_path)
 
+        last_heartbeat = asyncio.get_event_loop().time()
         while not executor_task.done() or not queue.empty():
             try:
                 # Esperar logs o finalizar
-                msg = await asyncio.wait_for(queue.get(), timeout=1.0)
+                msg = await asyncio.wait_for(queue.get(), timeout=2.0)
                 yield {"data": f"LOG: {msg}"}
+                last_heartbeat = asyncio.get_event_loop().time()
             except asyncio.TimeoutError:
+                # Heartbeat si han pasado más de 10 seg
+                if asyncio.get_event_loop().time() - last_heartbeat > 10:
+                    yield {"comment": "ping"}
+                    last_heartbeat = asyncio.get_event_loop().time()
+                    
                 if await fastapi_request.is_disconnected():
                     break
-                continue
 
-        result = await executor_task
-        yield {"data": f"RESULT: {result['report']}"}
-        yield {"data": f"TRANSCRIPT: {result['transcript']}"}
-        await save_to_vault(request.vault_path, f"ROADMAP_{request.message[:20]}", result['report'])
+            result = await executor_task
+            yield {"data": f"RESULT: {result['report']}"}
+            yield {"data": f"TRANSCRIPT: {result['transcript']}"}
+            await save_to_vault(request.vault_path, f"ROADMAP_{request.message[:20]}", result['report'])
+        except Exception as e:
+            error_trace = traceback.format_exc()
+            logging.error(f"ERROR EN ROADMAP: {str(e)}\n{error_trace}")
+            yield {"data": f"LOG: ❌ Error crítico (Ver log): {str(e)}"}
+            yield {"data": f"RESULT: Lo siento, ocurrió un error en el Roadmap. Detalles: {str(e)}"}
 
     return EventSourceResponse(event_generator())
 
@@ -271,6 +303,7 @@ async def blueprint_roadmap(request: ChatRequest, fastapi_request: Request):
 async def blueprint_synergy(request: Request):
     data = await request.json()
     topics = data.get("topics", [])
+    vault_path = data.get("vault_path")
     
     async def event_generator():
         queue = asyncio.Queue()
@@ -279,21 +312,45 @@ async def blueprint_synergy(request: Request):
         def log_to_queue(msg):
             loop.call_soon_threadsafe(queue.put_nowait, msg)
 
-        engine = BlueprintEngine(model_name=MODEL_NAME, log_callback=log_to_queue)
-        
-        executor_task = loop.run_in_executor(None, engine.run_synergy_matrix, topics)
+        try:
+            import traceback
+            # Pre-instanciar motor ANTES de empezar el yield fuerte
+            engine = BlueprintEngine(model_name=MODEL_NAME, log_callback=log_to_queue)
+            
+            # Pulsar inmediatamente para asegurar el canal SSE
+            yield {"data": "LOG: 🧠 Motor MI-AI Sincronizado. Iniciando análisis..."}
+            
+            executor_task = loop.run_in_executor(None, engine.run_synergy_matrix, topics, vault_path)
 
-        while not executor_task.done() or not queue.empty():
-            try:
-                msg = await asyncio.wait_for(queue.get(), timeout=1.0)
-                yield {"data": f"LOG: {msg}"}
-            except asyncio.TimeoutError:
-                if await request.is_disconnected():
-                    break
-                continue
-        
-        result = await executor_task
-        yield {"data": f"RESULT: {result['report']}"}
+            last_heartbeat = asyncio.get_event_loop().time()
+            while not executor_task.done() or not queue.empty():
+                try:
+                    # Esperar un mensaje de log
+                    msg = await asyncio.wait_for(queue.get(), timeout=1.0)
+                    yield {"data": f"LOG: {msg}"}
+                    last_heartbeat = asyncio.get_event_loop().time()
+                except asyncio.TimeoutError:
+                    # Enviar heartbeat si han pasado más de 10 segundos sin actividad
+                    now = asyncio.get_event_loop().time()
+                    if now - last_heartbeat > 10:
+                        yield {"comment": "ping"}
+                        last_heartbeat = now
+                    
+                    if await request.is_disconnected():
+                        print("📡 Cliente desconectado prematuramente.")
+                        break
+            
+            result = await executor_task
+            yield {"data": f"RESULT: {result['report']}"}
+        except Exception as e:
+            error_trace = traceback.format_exc()
+            logging.error(f"ERROR EN SINERGIA: {str(e)}\n{error_trace}")
+            print(f"❌ ERROR CRÍTICO EN SINERGIA:\n{error_trace}")
+            yield {"data": f"LOG: ❌ Error crítico (Ver consola): {str(e)}"}
+            yield {"data": f"RESULT: Lo siento, ocurrió un error al procesar la sinergia. Detalles: {str(e)}"}
+
+    return EventSourceResponse(event_generator())
+
 @app.post("/blueprint/organize")
 async def blueprint_organize(request: ChatRequest, fastapi_request: Request):
     async def event_generator():

@@ -18,14 +18,13 @@ class BlueprintEngine:
         if self.log_callback:
             self.log_callback(message)
 
-    def run_research_roadmap(self, topic: str) -> Dict[str, Any]:
+    def run_research_roadmap(self, topic: str, vault_path: str = None) -> Dict[str, Any]:
         """
         Blueprint: Roadmap de Investigación.
         Secuencia: Estado del Arte -> Crítica de Brechas -> Visión Futura.
         """
         self._log(f"\n🚀 Iniciando Blueprint: ROADMAP DE INVESTIGACIÓN para '{topic}'")
         
-        # 0. Preparar registro de actividad (Transcript)
         log = []
         log.append(f"--- INICIO DE BLUEPRINT: ROADMAP DE INVESTIGACIÓN ---")
         log.append(f"Objetivo: {topic}")
@@ -39,15 +38,18 @@ class BlueprintEngine:
         log.append(f"Paso 1: Seleccionadas {len(selected_web)} fuentes web académicas/generales.")
         
         web_contents = [self.ingestor.scrape_url(s['url']) for s in selected_web]
-        local_texts = self.ingestor.load_local_data("data_sources")
+        
         local_context = ""
-        if local_texts:
-            log.append(f"Paso 1: Indexando carpeta local 'data_sources'.")
-            self.ingestor.index_data(local_texts, "LOCAL", "roadmap_index")
-            retriever = self.ingestor.get_retriever()
-            docs = retriever.invoke(topic)
-            local_context = "\n".join([d.page_content for d in docs])
-            log.append(f"Paso 1: Contexto local recuperado (RAG).")
+        if vault_path:
+            self._log(f"📂 Cargando contexto local de: {vault_path}")
+            local_texts = self.ingestor.load_local_data(vault_path)
+            if local_texts:
+                log.append(f"Paso 1: Indexando documentos locales del Vault.")
+                self.ingestor.index_data(local_texts, "LOCAL", "roadmap_index")
+                retriever = self.ingestor.get_retriever()
+                docs = retriever.invoke(topic)
+                local_context = "\n".join([d.page_content for d in docs])
+                log.append(f"Paso 1: Contexto local recuperado (RAG).")
 
         combined_context = f"--- CONTEXTO LOCAL ---\n{local_context}\n\n--- CONTEXTO WEB ---\n" + "\n".join(web_contents)
 
@@ -87,13 +89,20 @@ class BlueprintEngine:
 
 ## 3. LÍNEAS DE INVESTIGACIÓN Y PROPUESTAS VISIONARIAS
 {vision}
+
+## 4. BIBLIOGRAFÍA Y FUENTES
+{chr(10).join([f"- [{s.get('title', 'Fuente Web')}]({s['url']})" for s in selected_web])}
+- **Contexto Local:** {'Utilizado (Vault)' if vault_path else 'No utilizado'}
+
+---
+*Este reporte fue generado por MI-AI Intelligence usando una orquestación de agentes autónomos.*
 """
         return {
             "report": full_report,
             "transcript": "\n".join(log)
         }
 
-    def run_synergy_matrix(self, topics: List[str]) -> Dict[str, Any]:
+    def run_synergy_matrix(self, topics: List[str], vault_path: str = None) -> Dict[str, Any]:
         """
         Blueprint: Matriz de Sinergias (Híbrida).
         Busca conexiones no obvias entre múltiples conceptos usando Web y Local.
@@ -106,41 +115,67 @@ class BlueprintEngine:
         log.append(f"Temas: {combined_topics}")
 
         # 0. Preparar índice local una sola vez si existe
-        local_texts = self.ingestor.load_local_data("data_sources")
+        local_texts = []
+        if vault_path:
+            self._log("📂 Cargando contexto local del Vault...")
+            local_texts = self.ingestor.load_local_data(vault_path)
+        else:
+            # Fallback a carpeta data_sources si no hay vault_path
+            local_texts = self.ingestor.load_local_data("data_sources")
+
         retriever = None
         if local_texts:
-            log.append("Paso 0: Indexando fuentes locales ('data_sources').")
+            self._log(f"🧠 Indexando {len(local_texts)} documentos locales para sinergia...")
             self.ingestor.index_data(local_texts, "LOCAL", "synergy_index")
             retriever = self.ingestor.get_retriever()
 
-        # 1. Extraer esencia de cada concepto (Híbrido)
+        # 1. Extraer esencia de cada concepto (Híbrido) - PROCESAMIENTO EN PARALELO
+        from concurrent.futures import ThreadPoolExecutor
         essences = {}
-        for t in topics:
-            self._log(f"🔍 Extrayendo esencia híbrida de: {t}...")
-            log.append(f"Paso 1: Agente [Detective] extrayendo esencia híbrida de '{t}'.")
-            
+        all_sources = []
+        
+        def process_single_topic(t):
+            self._log(f"🔍 [PARALELO] Investigando esencia de: {t}...")
             # A. Contexto Web
-            queries = {"en": t, "orig": t}
+            queries = self.agent_manager.generate_search_queries(t)
             web_res = self.ingestor.get_combined_research(queries)
-            web_context = "\n".join([r['summary'] for r in web_res[:3]])
+            selected_web = self.agent_manager.select_best_sources(web_res, t)
+            
+            web_contents = []
+            current_sources = []
+            for s in selected_web[:5]: # Aumentado a 5 fuentes por tema
+                content = self.ingestor.scrape_url(s['url'])
+                web_contents.append(content[:5000])
+                current_sources.append(s)
+                
+            web_context = "\n".join(web_contents)
             
             # B. Contexto Local
             local_context = ""
             if retriever:
                 docs = retriever.invoke(t)
-                local_context = "\n".join([d.page_content for d in docs])
+                local_context = "\n".join([d.page_content for d in docs[:3]])
                 
             combined_item_context = f"--- WEB ---\n{web_context}\n\n--- LOCAL ---\n{local_context}"
             essence = self.agent_manager.extract_information(combined_item_context, t)
+            return t, essence, current_sources
+
+        # Lanzar hilos en paralelo
+        self._log(f"🧵 Lanzando investigación paralela para {len(topics)} temas...")
+        with ThreadPoolExecutor(max_workers=len(topics)) as executor:
+            thread_results = list(executor.map(process_single_topic, topics))
+            
+        for t, essence, sources in thread_results:
             essences[t] = essence
-            log.append(f"Paso 1: [Detective] extrajo esencia de '{t}': {essence[:100]}...")
+            all_sources.extend(sources)
+            log.append(f"Paso 1: Esencia de '{t}' extraída correctamente.")
 
         # 2. Agente Visionario busca sinergias
         self._log("\n🔮 PASO 2: Agente Visionario trazando conexiones disruptivas...")
         context_all = "\n\n".join([f"CONCEPTO {k}:\n{v}" for k, v in essences.items()])
         synergies = self.agent_manager._run_agent_task(
             "Arquitecto de Sinergias",
-            "Tu misión es encontrar el 'puerto común' entre conceptos dispares. Debes crear una Matriz de Sinergias donde expliques cómo A potencia a B, y qué solución nueva surge de la unión de ambos.",
+            "Tu misión es encontrar el 'puerto común' entre conceptos dispares. Debes crear una Matriz de Sinergias donde expliques cómo A potencia a B, y qué solución nueva surge de la unión de ambos. Cita tus fuentes locales o web si son necesarias.",
             context_all,
             f"Crea una Matriz de Sinergias para: {combined_topics}. Enfócate en innovación radical y usa los datos locales si aportan valor diferencial."
         )
@@ -148,11 +183,22 @@ class BlueprintEngine:
         log_sinergia = synergies[:200].replace('\n', ' ') + "..."
         log.append(f"Paso 2: Agente [Visionario] detectó una oportunidad de unión: '{log_sinergia}'")
 
+        # Construir bibliografía unificada
+        unique_urls = {s['url']: s for s in all_sources}.values()
+        biblio_links = "\n".join([f"- [{s.get('title', 'Fuente Web')}]({s['url']})" for s in unique_urls])
+
         full_report = f"""
 # MATRIZ DE SINERGIAS HÍBRIDA: {combined_topics.upper()}
 
 ## ANÁLISIS DE INTERSECCIÓN DISRUPTIVA (LOCAL + WEB)
 {synergies}
+
+## BIBLIOGRAFÍA Y FUENTES CONSULTADAS
+{biblio_links}
+- **Contexto Local:** {'Utilizado (Vault)' if vault_path else 'No utilizado'}
+
+---
+*Este reporte fue generado por MI-AI Intelligence usando una orquestación de agentes autónomos.*
 """
         return {
             "report": full_report,

@@ -27,16 +27,26 @@ class DataIngestor:
         if os.path.isfile(path):
             file_paths = [path]
         elif os.path.isdir(path):
-            # Buscar archivos con las extensiones soportadas
+            # Buscar archivos con las extensiones soportadas de forma recursiva
             extensions = ('.pdf', '.docx', '.txt', '.md')
-            file_paths = [os.path.join(path, f) for f in os.listdir(path) if f.lower().endswith(extensions)]
+            file_paths = []
+            
+            for root, dirs, files in os.walk(path):
+                # Ignorar carpetas ocultas o del sistema
+                dirs[:] = [d for d in dirs if not d.startswith('.') and d not in ['node_modules', 'venv', 'env']]
+                for f in files:
+                    if f.lower().endswith(extensions):
+                        file_paths.append(os.path.join(root, f))
         else:
-            raise FileNotFoundError(f"La ruta no existe: {path}")
+            if not os.path.exists(path):
+                raise FileNotFoundError(f"La ruta no existe: {path}")
+            file_paths = []
 
         if not file_paths:
             print(f"⚠️ No se encontraron archivos soportados en: {path}")
             return []
 
+        print(f"📂 Encontrados {len(file_paths)} archivos. Iniciando carga...")
         for p in file_paths:
             ext = os.path.splitext(p)[1].lower()
             filename = os.path.basename(p)
@@ -94,30 +104,29 @@ class DataIngestor:
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/ST/Lac'
             }
-            response = requests.get(url, headers=headers, timeout=15)
-            response.raise_for_status() # Lanza excepción para códigos de error HTTP
-            
-            soup = BeautifulSoup(response.content, 'html.parser')
+            response = requests.get(url, headers=headers, timeout=5)
+            response.encoding = 'utf-8'
+            soup = BeautifulSoup(response.text, 'html.parser')
             
             # Eliminar scripts y estilos
             for script in soup(["script", "style"]):
                 script.extract()
 
             # Intentar obtener texto limpio
-            text = soup.get_text(separator='\n', strip=True)
+            text = soup.get_text(separator='\n')
             
-            # Limpieza final para evitar ruido
-            cleaned_text = '\n'.join(filter(lambda x: len(x.strip()) > 20, text.split('\n')))
+            # Limpieza de espacios en blanco excesivos
+            lines = (line.strip() for line in text.splitlines())
+            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+            text = '\n'.join(chunk for chunk in chunks if chunk)
             
-            if len(cleaned_text) < 100:
-                 return f"[FALLO SCRAPING: Contenido muy corto o bloqueado. URL: {url}]"
-            
-            return f"*** FUENTE WEB ({url}) ***\n{cleaned_text}"
+            # ESTAMPAR URL PARA BIBLIOGRAFÍA
+            return f"--- FUENTE WEB: {url} ---\n{text[:10000]}"
             
         except Exception as e:
-            return f"[FALLO WEB SCRAPING: No se pudo acceder a la URL '{url}'. Error: {e}]"
+            return f"[ERROR al leer {url}: {str(e)}]"
 
-    def search_arxiv(self, query: str, max_results: int = 3) -> List[dict]:
+    def search_arxiv(self, query: str, max_results: int = 5) -> List[dict]:
         """
         Busca artículos científicos en arXiv.
         """
@@ -141,7 +150,7 @@ class DataIngestor:
             print(f"⚠️ Error en búsqueda de arXiv: {e}")
             return []
 
-    def search_academic(self, query: str, max_results: int = 5) -> List[dict]:
+    def search_academic(self, query: str, max_results: int = 8) -> List[dict]:
         """
         Busca en la web filtrando por dominios confiables.
         """
@@ -165,7 +174,7 @@ class DataIngestor:
             
         return results
 
-    def search_general(self, query: str, max_results: int = 5) -> List[dict]:
+    def search_general(self, query: str, max_results: int = 8) -> List[dict]:
         """
         Busca en la web general sin filtros restrictivos (Contexto actual).
         """
@@ -175,6 +184,12 @@ class DataIngestor:
             with DDGS() as ddgs:
                 ddgs_results = list(ddgs.text(query, max_results=max_results))
                 for r in ddgs_results:
+                    url = r['href'].lower()
+                    # Filtrar ruido de soporte y dominios genéricos de "ayuda"
+                    noise_domains = ['support.google.com', 'google.com/docs', 'microsoft.com', 'apple.com', 'youtube.com']
+                    if any(domain in url for domain in noise_domains):
+                        continue
+                        
                     results.append({
                         "title": r['title'],
                         "summary": r['body'],

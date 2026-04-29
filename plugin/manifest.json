@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "minAppVersion": "0.15.0",
   "description": "Conversational AI assistant using local Ollama model.",
-  "author": "Antigravity",
+  "author": "MI-AI",
   "authorUrl": "https://github.com/diegofvilla/obsidan-md-plugin",
   "isDesktopOnly": true
 }

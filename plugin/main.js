@@ -21770,8 +21770,9 @@ var MarkdownContent = ({ content, app }) => {
   React.useEffect(() => {
     if (containerRef.current) {
       containerRef.current.empty();
+      const cleanContent = content.replace("<!-- RESULT_LOADED -->", "");
       import_obsidian.MarkdownRenderer.renderMarkdown(
-        content,
+        cleanContent,
         containerRef.current,
         "",
         null
@@ -21833,10 +21834,11 @@ var ChatComponent = ({ app, settings }) => {
       };
       if (originalInput.startsWith("/roadmap ")) {
         endpoint = `http://localhost:${settings.serverPort}/blueprint/roadmap`;
-        body.message = originalInput.replace("/roadmap ", "");
+        body.message = originalInput.replace("/roadmap ", "").replace(/[\[\]]/g, "");
       } else if (originalInput.startsWith("/synergy ")) {
         endpoint = `http://localhost:${settings.serverPort}/blueprint/synergy`;
-        const topics = originalInput.replace("/synergy ", "").split(",").map((s) => s.trim());
+        const cleanInput = originalInput.replace("/synergy ", "").replace(/[\[\]]/g, "");
+        const topics = cleanInput.split(",").map((s) => s.trim());
         body = { topics, vault_path: app.vault.adapter.getBasePath() };
       } else if (originalInput === "/organize") {
         endpoint = `http://localhost:${settings.serverPort}/blueprint/organize`;
@@ -21924,9 +21926,10 @@ var ChatComponent = ({ app, settings }) => {
     setInput("");
   };
   const handleSaveToNote = async (content) => {
+    const cleanContent = content.replace("<!-- RESULT_LOADED -->", "");
     const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
     const fileName = `MI-AI_Report_${timestamp}.md`;
-    await app.vault.create(fileName, content);
+    await app.vault.create(fileName, cleanContent);
     app.workspace.openLinkText(fileName, "", true);
   };
   const handleSyncSharePoint = async () => {

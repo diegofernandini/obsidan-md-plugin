@@ -76,8 +76,8 @@ class AgentManager:
         Toma datos crudos y los estructura en un informe ejecutivo coherente.
         """
         role = "Editor Jefe / Agente Sintetizador"
-        system_prompt = "Tu función es dar cohesión y narrativa. Tomas la información fragmentada (los datos extraídos) y la transformas en un informe ejecutivo fluido, coherente y listo para la presentación en una junta directiva. Debes identificar la tesis principal y los puntos de riesgo/oportunidad. IMPORTANTE: El informe DEBE estar en el mismo idioma que el objetivo del usuario."
-        task = f"Utiliza los hallazgos y datos estructurados que te proporciono a continuación. Redacta un informe ejecutivo de análisis de mercado sobre '{task_context}'. El informe debe tener: 1) Tesis Central, 2) Argumentos Clave, y 3) Recomendaciones Estratégicas. Datos a usar:\n\n{extracted_data}"
+        system_prompt = "Tu función es dar cohesión y narrativa. Tomas la información fragmentada (los datos extraídos) y la transformas en un informe ejecutivo fluido y profesional. Cita las fuentes usando la sintaxis de Obsidian [[Nota]] o [Link](URL) dentro del texto. IMPORTANTE: NO incluyas ninguna sección de 'Bibliografía' al final de tu respuesta, ya que el sistema lo hará automáticamente."
+        task = f"Utiliza los hallazgos y datos que te proporciono a continuación. Redacta un informe ejecutivo de investigación sobre '{task_context}'. Informe:\n\n{extracted_data}"
         return self._run_agent_task(role, system_prompt, "", task)
 
     # --- PATRÓN 2: BÚSQUEDA GLOBAL Y REFERENCIADA (WEB) ---
@@ -86,18 +86,20 @@ class AgentManager:
         """
         Genera queries optimizadas (Inglés para academia, idioma original para general).
         """
-        role = "Arquitecto de Búsqueda multilingüe"
-        system_prompt = "Tu misión es traducir y optimizar temas de investigación. Debes generar una query técnica en inglés para obtener los mejores resultados científicos y una query en el idioma original para contexto local."
-        task = f"Para el tema '{topic}', genera una respuesta con este formato EXACTO:\nEN_QUERY: <query en inglés>\nORIG_QUERY: <query en idioma original>"
+        role = "Experto en Búsquedas"
+        system_prompt = "Genera términos de búsqueda técnicos y precisos. Responde Directamente con el formato solicitado."
+        task = f"Tema: '{topic}'. Responde solo con esto:\nEN_QUERY: <términos en inglés>\nORIG_QUERY: <términos en el idioma original>"
         
         response = self._run_agent_task(role, system_prompt, "", task)
+        
+        print(f"📡 Query detectada -> {response.strip()}")
         
         queries = {"en": topic, "orig": topic}
         for line in response.split('\n'):
             if "EN_QUERY:" in line:
-                queries["en"] = line.split("EN_QUERY:")[1].strip().strip('"')
+                queries["en"] = line.split("EN_QUERY:")[1].strip().strip('<').strip('>').strip('"')
             if "ORIG_QUERY:" in line:
-                queries["orig"] = line.split("ORIG_QUERY:")[1].strip().strip('"')
+                queries["orig"] = line.split("ORIG_QUERY:")[1].strip().strip('<').strip('>').strip('"')
         
         print(f"🔍 Queries generadas -> [EN]: {queries['en']} | [ORIG]: {queries['orig']}")
         return queries
@@ -111,8 +113,9 @@ class AgentManager:
 
         role = "Investigador / Curador de Contenido"
         system_prompt = """Eres un experto en análisis de información. 
-        Tu tarea es evaluar resultados de búsqueda y seleccionar los que tengan mayor relación con el tema.
-        Prioriza la calidad, pero si no hay fuentes perfectas, selecciona las mejores disponibles que aporten contexto útil. 
+        Tu tarea es evaluar resultados de búsqueda y seleccionar todos aquellos que tengan relación con el tema.
+        NO seas demasiado estricto: si una fuente aporta un ángulo diferente o contexto útil, selecciónala. 
+        Prioriza tener una bibliografía extensa y variada (hasta 10 fuentes).
         Responde SIEMPRE en el formato solicitado para que el sistema pueda procesarlo."""
         
         # Preparar la lista para el LLM
@@ -126,11 +129,6 @@ class AgentManager:
         selection_response = self._run_agent_task(role, system_prompt, "", task)
         print(f"\n✅ Análisis del Investigador: {selection_response}")
         
-        # Fallback de seguridad: Si hay resultados pero el AI dice NONE, tomamos los primeros
-        if "[[NONE]]" in selection_response.upper():
-            print("⚠️ El AI fue estricto, aplicando fallback para no perder el contexto...")
-            return [search_results[0]]
-            
         # Extraer bloques de índices usando regex
         match = re.search(r'\[\[(.*?)\]\]', selection_response)
         selected_indices = []
@@ -146,11 +144,12 @@ class AgentManager:
                     except:
                         continue
         
-        # Si falló el regex pero el AI no dijo NONE, fallback al primero
+        # Fallback de seguridad: Si no se detectaron índices o el AI fue demasiado estricto
         if not selected_indices and search_results:
-            return [search_results[0]]
+            print("⚠️ Aplicando fallback automático (Top 5 fuentes)...")
+            return search_results[:5]
             
-        return [search_results[i] for i in selected_indices[:2]]
+        return [search_results[i] for i in selected_indices[:10]]
 
     # --- PATRÓN 2: ANÁLISIS DE CONTRASTE (WEB SCRAPING) ---
 
@@ -177,7 +176,7 @@ class AgentManager:
 
         # 3. Síntesis Final (Mediador)
         role_mediador = "Director de Análisis Senior"
-        system_prompt_mediador = f"Tu tarea es sintetizar el debate. Debes crear una Matriz de Decisión de Riesgos/Oportunidades. IMPORTANTE: El informe final DEBE estar redactado íntegramente en el idioma del tema solicitado ('{task_context}')."
+        system_prompt_mediador = f"Tu tarea es sintetizar el debate. Debes crear una Matriz de Decisión de Riesgos/Oportunidades. Cita tus fuentes usando la sintaxis de Obsidian dentro del cuerpo del texto. IMPORTANTE: El informe final DEBE estar redactado íntegramente en el idioma del tema solicitado ('{task_context}'). NO crees una sección de Bibliografía al final."
         
         task_mediador = f"""
         Basándote en los siguientes análisis de debate, redacta un informe final de "Matriz de Decisión" sobre: {task_context}.
@@ -215,10 +214,11 @@ class AgentManager:
         2. Analiza oportunidades de cada postura.
         3. Da una RECOMENDACIÓN FINAL accionable.
         4. NUNCA uses frases genéricas como "[Fuente interna]" o "[Fuente externa]".
-        5. Cita SIEMPRE usando la sintaxis exacta de Obsidian. 
+        5. Cita SIEMPRE usando la sintaxis exacta de Obsidian dentro del texto. 
            - Si la info viene de una URL, usa el formato: [Texto](URL)
            - Si la info viene de un archivo local, usa WIKILINKS: [[Nombre_del_Archivo]]
         6. IMPORTANTE: Responde SIEMPRE en el mismo idioma en que se te ha planteado el tema ('{topic}').
+        7. REGLA CRUCIAL: NO incluyas una sección final de 'Bibliografía', limítate a citar dentro del contenido.
         """
 
         combined_web = "\n\n".join(web_contents)

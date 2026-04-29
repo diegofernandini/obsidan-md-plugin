@@ -45,8 +45,10 @@ const MarkdownContent = ({ content, app }: { content: string, app: any }) => {
     React.useEffect(() => {
         if (containerRef.current) {
             containerRef.current.empty();
+            // Eliminar etiquetas internas antes de renderizar
+            const cleanContent = content.replace('<!-- RESULT_LOADED -->', '');
             MarkdownRenderer.renderMarkdown(
-                content,
+                cleanContent,
                 containerRef.current,
                 '',
                 null as any
@@ -109,7 +111,7 @@ const ChatComponent = ({ app, settings }: { app: any, settings: any }) => {
                 noteContent = await app.vault.read(activeFile);
             }
 
-            let endpoint = `http://localhost:${settings.serverPort}/chat`;
+            let endpoint = `http://127.0.0.1:${settings.serverPort}/chat`;
             let body: any = {
                 message: originalInput,
                 vault_path: app.vault.adapter.getBasePath(),
@@ -120,14 +122,15 @@ const ChatComponent = ({ app, settings }: { app: any, settings: any }) => {
 
             // Handle Slash Commands (override mode if necessary)
             if (originalInput.startsWith('/roadmap ')) {
-                endpoint = `http://localhost:${settings.serverPort}/blueprint/roadmap`;
-                body.message = originalInput.replace('/roadmap ', '');
+                endpoint = `http://127.0.0.1:${settings.serverPort}/blueprint/roadmap`;
+                body.message = originalInput.replace('/roadmap ', '').replace(/[\[\]]/g, '');
             } else if (originalInput.startsWith('/synergy ')) {
-                endpoint = `http://localhost:${settings.serverPort}/blueprint/synergy`;
-                const topics = originalInput.replace('/synergy ', '').split(',').map(s => s.trim());
+                endpoint = `http://127.0.0.1:${settings.serverPort}/blueprint/synergy`;
+                const cleanInput = originalInput.replace('/synergy ', '').replace(/[\[\]]/g, '');
+                const topics = cleanInput.split(',').map(s => s.trim());
                 body = { topics, vault_path: app.vault.adapter.getBasePath() };
             } else if (originalInput === '/organize') {
-                endpoint = `http://localhost:${settings.serverPort}/blueprint/organize`;
+                endpoint = `http://127.0.0.1:${settings.serverPort}/blueprint/organize`;
                 // No message needed, vault_path is sent in the body already
             }
 
@@ -226,9 +229,10 @@ const ChatComponent = ({ app, settings }: { app: any, settings: any }) => {
     };
 
     const handleSaveToNote = async (content: string) => {
+        const cleanContent = content.replace('<!-- RESULT_LOADED -->', '');
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
         const fileName = `MI-AI_Report_${timestamp}.md`;
-        await app.vault.create(fileName, content);
+        await app.vault.create(fileName, cleanContent);
         app.workspace.openLinkText(fileName, '', true);
     };
 
