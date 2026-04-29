@@ -10,6 +10,13 @@ interface Message {
     agent?: string;
 }
 
+interface ChatSession {
+    id: string;
+    title: string;
+    createdAt: number;
+    messages: Message[];
+}
+
 export class ChatView extends ItemView {
     settings: any;
     root: ReactDOM.Root | null = null;
@@ -71,7 +78,36 @@ const ChatComponent = ({ app, settings }: { app: any, settings: any }) => {
     const [currentAgent, setCurrentAgent] = React.useState('Detective / Agente Extractor');
     const [currentMode, setCurrentMode] = React.useState('local');
     const [autoScroll, setAutoScroll] = React.useState(true);
+    const [chatHistory, setChatHistory] = React.useState<ChatSession[]>([]);
+    const [showHistory, setShowHistory] = React.useState(false);
+    const [activeSessionId, setActiveSessionId] = React.useState<string | null>(null);
+    const [saveState, setSaveState] = React.useState<'idle' | 'saving' | 'saved'>('idle');
+    const savedBadgeTimerRef = React.useRef<number | null>(null);
     const scrollRef = React.useRef<HTMLDivElement>(null);
+
+    const HISTORY_STORAGE_KEY = 'mi-ai-chat-history';
+    const HISTORY_MAX_ITEMS = 20;
+
+    React.useEffect(() => {
+        try {
+            const rawHistory = localStorage.getItem(HISTORY_STORAGE_KEY);
+            if (!rawHistory) return;
+            const parsed: ChatSession[] = JSON.parse(rawHistory);
+            if (Array.isArray(parsed)) {
+                setChatHistory(parsed);
+            }
+        } catch (error) {
+            console.error('No se pudo cargar el historial del chat', error);
+        }
+    }, []);
+
+    React.useEffect(() => {
+        try {
+            localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(chatHistory));
+        } catch (error) {
+            console.error('No se pudo guardar el historial del chat', error);
+        }
+    }, [chatHistory]);
 
     const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
         const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
@@ -226,7 +262,65 @@ const ChatComponent = ({ app, settings }: { app: any, settings: any }) => {
         if (isLoading) return;
         setMessages([]);
         setInput('');
+        setShowHistory(false);
+        setActiveSessionId(null);
     };
+
+    const buildSessionTitle = (sessionMessages: Message[]) => {
+        const firstUserMessage = sessionMessages.find((m) => m.role === 'user');
+        if (!firstUserMessage?.content) return 'Conversación sin título';
+        const compact = firstUserMessage.content.trim().replace(/\s+/g, ' ');
+        return compact.length > 48 ? `${compact.slice(0, 48)}...` : compact;
+    };
+
+    const saveChatToHistory = (sessionMessages: Message[], sessionId?: string) => {
+        if (sessionMessages.length === 0) return;
+        setSaveState('saving');
+        const clonedMessages = sessionMessages.map((m) => ({ ...m }));
+        const resolvedSessionId = sessionId ?? `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const session: ChatSession = {
+            id: resolvedSessionId,
+            title: buildSessionTitle(clonedMessages),
+            createdAt: Date.now(),
+            messages: clonedMessages
+        };
+        setChatHistory((prev) => {
+            const withoutCurrent = prev.filter((item) => item.id !== resolvedSessionId);
+            return [session, ...withoutCurrent].slice(0, HISTORY_MAX_ITEMS);
+        });
+        setActiveSessionId(resolvedSessionId);
+        setSaveState('saved');
+        if (savedBadgeTimerRef.current) {
+            window.clearTimeout(savedBadgeTimerRef.current);
+        }
+        savedBadgeTimerRef.current = window.setTimeout(() => setSaveState('idle'), 1400);
+    };
+
+    const loadSession = (session: ChatSession) => {
+        if (isLoading) return;
+        setMessages(session.messages.map((m) => ({ ...m })));
+        setInput('');
+        setShowHistory(false);
+        setActiveSessionId(session.id);
+    };
+
+    React.useEffect(() => {
+        if (messages.length === 0) return;
+        setSaveState('saving');
+        const autosaveTimer = window.setTimeout(() => {
+            saveChatToHistory(messages, activeSessionId ?? undefined);
+        }, 400);
+
+        return () => window.clearTimeout(autosaveTimer);
+    }, [messages, activeSessionId]);
+
+    React.useEffect(() => {
+        return () => {
+            if (savedBadgeTimerRef.current) {
+                window.clearTimeout(savedBadgeTimerRef.current);
+            }
+        };
+    }, []);
 
     const handleSaveToNote = async (content: string) => {
         const cleanContent = content.replace('<!-- RESULT_LOADED -->', '');
@@ -360,40 +454,154 @@ const ChatComponent = ({ app, settings }: { app: any, settings: any }) => {
                 gap: '6px',
                 padding: '0 4px'
             }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px', position: 'relative' }}>
                     <span style={{ fontSize: '0.8em', fontWeight: 'bold', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>MI-AI Intelligence</span>
-                    <button 
-                        onClick={handleNewChat}
-                        title="Nueva conversación"
-                        className="mod-subtle"
-                        style={{ 
-                            background: 'var(--background-modifier-border)', 
-                            border: '1px solid var(--background-modifier-border)', 
-                            cursor: 'pointer', 
-                            fontSize: '0.85em',
-                            padding: '4px 10px',
-                            borderRadius: '4px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                            color: 'var(--text-normal)',
-                            fontWeight: '500',
-                            boxShadow: 'none',
-                            transition: 'all 0.2s ease'
-                        }}
-                        onMouseOver={(e) => {
-                            e.currentTarget.style.background = 'rgba(123, 97, 255, 0.15)';
-                            e.currentTarget.style.borderColor = 'rgba(123, 97, 255, 0.3)';
-                            e.currentTarget.style.boxShadow = '0 1px 4px rgba(0,0,0,0.1)';
-                        }}
-                        onMouseOut={(e) => {
-                            e.currentTarget.style.background = 'var(--background-modifier-border)';
-                            e.currentTarget.style.borderColor = 'var(--background-modifier-border)';
-                            e.currentTarget.style.boxShadow = 'none';
-                        }}
-                    >
-                        <span>+ Nuevo</span>
-                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', position: 'relative' }}>
+                        <span
+                            style={{
+                                fontSize: '0.72em',
+                                color: saveState === 'saved' ? 'var(--text-accent)' : 'var(--text-muted)',
+                                opacity: saveState === 'idle' ? 0 : 1,
+                                transition: 'opacity 0.2s ease, color 0.2s ease',
+                                minWidth: '54px',
+                                textAlign: 'right',
+                                letterSpacing: '0.01em'
+                            }}
+                        >
+                            {saveState === 'saving' ? 'Saving...' : saveState === 'saved' ? 'Saved' : ''}
+                        </span>
+                        <button
+                            onClick={() => {
+                                if (!showHistory && messages.length > 0) {
+                                    saveChatToHistory(messages, activeSessionId ?? undefined);
+                                }
+                                setShowHistory((prev) => !prev);
+                            }}
+                            title="Mostrar historial del chat"
+                            className="mod-subtle"
+                            style={{
+                                background: 'var(--background-modifier-border)',
+                                border: '1px solid var(--background-modifier-border)',
+                                cursor: 'pointer',
+                                fontSize: '0.85em',
+                                width: '28px',
+                                height: '28px',
+                                borderRadius: '4px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                color: 'var(--text-normal)',
+                                boxShadow: showHistory ? '0 1px 4px rgba(123, 97, 255, 0.25)' : 'none',
+                                transition: 'all 0.2s ease'
+                            }}
+                            onMouseOver={(e) => {
+                                e.currentTarget.style.background = 'rgba(123, 97, 255, 0.15)';
+                                e.currentTarget.style.borderColor = 'rgba(123, 97, 255, 0.3)';
+                                e.currentTarget.style.boxShadow = '0 1px 4px rgba(0,0,0,0.1)';
+                            }}
+                            onMouseOut={(e) => {
+                                e.currentTarget.style.background = 'var(--background-modifier-border)';
+                                e.currentTarget.style.borderColor = 'var(--background-modifier-border)';
+                                e.currentTarget.style.boxShadow = showHistory ? '0 1px 4px rgba(123, 97, 255, 0.25)' : 'none';
+                            }}
+                        >
+                            <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true">
+                                <path
+                                    d="M12 2a10 10 0 1 0 10 10A10.012 10.012 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8.009 8.009 0 0 1-8 8zm1-12h-2v5.414l3.293 3.293 1.414-1.414L13 12.586z"
+                                    fill="currentColor"
+                                />
+                            </svg>
+                        </button>
+                        <button
+                            onClick={handleNewChat}
+                            title="Nueva conversación"
+                            className="mod-subtle"
+                            style={{
+                                background: 'var(--background-modifier-border)',
+                                border: '1px solid var(--background-modifier-border)',
+                                cursor: 'pointer',
+                                fontSize: '0.85em',
+                                padding: '4px 10px',
+                                borderRadius: '4px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                color: 'var(--text-normal)',
+                                fontWeight: '500',
+                                boxShadow: 'none',
+                                transition: 'all 0.2s ease'
+                            }}
+                            onMouseOver={(e) => {
+                                e.currentTarget.style.background = 'rgba(123, 97, 255, 0.15)';
+                                e.currentTarget.style.borderColor = 'rgba(123, 97, 255, 0.3)';
+                                e.currentTarget.style.boxShadow = '0 1px 4px rgba(0,0,0,0.1)';
+                            }}
+                            onMouseOut={(e) => {
+                                e.currentTarget.style.background = 'var(--background-modifier-border)';
+                                e.currentTarget.style.borderColor = 'var(--background-modifier-border)';
+                                e.currentTarget.style.boxShadow = 'none';
+                            }}
+                        >
+                            <span>+ Nuevo</span>
+                        </button>
+                        {showHistory && (
+                            <div
+                                style={{
+                                    position: 'absolute',
+                                    top: '34px',
+                                    right: 0,
+                                    zIndex: 20,
+                                    width: '280px',
+                                    maxHeight: '280px',
+                                    overflowY: 'auto',
+                                    background: 'var(--background-primary-alt)',
+                                    border: '1px solid var(--background-modifier-border)',
+                                    borderRadius: '6px',
+                                    boxShadow: '0 6px 18px rgba(0, 0, 0, 0.25)',
+                                    padding: '6px'
+                                }}
+                            >
+                                {chatHistory.length === 0 ? (
+                                    <div style={{ color: 'var(--text-muted)', fontSize: '0.8em', padding: '8px' }}>
+                                        Aun no hay conversaciones guardadas.
+                                    </div>
+                                ) : (
+                                    chatHistory.map((session) => (
+                                        <button
+                                            key={session.id}
+                                            onClick={() => loadSession(session)}
+                                            style={{
+                                                width: '100%',
+                                                textAlign: 'left',
+                                                border: '1px solid transparent',
+                                                background: 'transparent',
+                                                color: 'var(--text-normal)',
+                                                borderRadius: '4px',
+                                                padding: '8px',
+                                                cursor: 'pointer',
+                                                marginBottom: '4px'
+                                            }}
+                                            onMouseOver={(e) => {
+                                                e.currentTarget.style.background = 'rgba(123, 97, 255, 0.12)';
+                                                e.currentTarget.style.borderColor = 'rgba(123, 97, 255, 0.2)';
+                                            }}
+                                            onMouseOut={(e) => {
+                                                e.currentTarget.style.background = 'transparent';
+                                                e.currentTarget.style.borderColor = 'transparent';
+                                            }}
+                                        >
+                                            <div style={{ fontSize: '0.82em', fontWeight: 500, marginBottom: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                                {session.title}
+                                            </div>
+                                            <div style={{ fontSize: '0.72em', color: 'var(--text-muted)' }}>
+                                                {new Date(session.createdAt).toLocaleString()}
+                                            </div>
+                                        </button>
+                                    ))
+                                )}
+                            </div>
+                        )}
+                    </div>
                 </div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
