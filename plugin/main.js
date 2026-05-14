@@ -21841,7 +21841,7 @@ var ChatComponent = ({ app, settings }) => {
     const assistantMsg = {
       role: "assistant",
       content: "",
-      agent: originalInput.startsWith("/organize") ? "\u{1F3D7}\uFE0F Arquitecto de B\xF3veda" : originalInput.startsWith("/roadmap ") ? "\u{1F5FA}\uFE0F Roadmap Blueprint" : originalInput.startsWith("/synergy ") ? "\u{1F52E} Sinergia Blueprint" : currentAgent
+      agent: originalInput.startsWith("/organize") ? "\u{1F3D7}\uFE0F Arquitecto de B\xF3veda" : originalInput.startsWith("/roadmap ") ? "\u{1F5FA}\uFE0F Roadmap Blueprint" : originalInput.startsWith("/synergy ") ? "\u{1F52E} Sinergia Blueprint" : originalInput.startsWith("/explore ") ? "\u{1F4DA} Exploraci\xF3n literaria" : currentAgent
     };
     setMessages((prev) => [...prev, assistantMsg]);
     try {
@@ -21866,6 +21866,11 @@ var ChatComponent = ({ app, settings }) => {
         const cleanInput = originalInput.replace("/synergy ", "").replace(/[\[\]]/g, "");
         const topics = cleanInput.split(",").map((s) => s.trim());
         body = { topics, vault_path: app.vault.adapter.getBasePath() };
+      } else if (originalInput.startsWith("/explore ")) {
+        endpoint = `http://127.0.0.1:${settings.serverPort}/blueprint/explore`;
+        const cleanInput = originalInput.replace("/explore ", "").replace(/[\[\]]/g, "");
+        const topics = cleanInput.split(",").map((s) => s.trim());
+        body = { topics, vault_path: app.vault.adapter.getBasePath() };
       } else if (originalInput === "/organize") {
         endpoint = `http://127.0.0.1:${settings.serverPort}/blueprint/organize`;
       }
@@ -21874,6 +21879,10 @@ var ChatComponent = ({ app, settings }) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
       });
+      if (!response.ok) {
+        setMessages((prev) => [...prev, { role: "system", content: `Error: ${response.status} - ${response.statusText}` }]);
+        return;
+      }
       if (!response.body) return;
       let fullContent = "";
       const reader = (_a = response.body) == null ? void 0 : _a.getReader();
@@ -21883,10 +21892,17 @@ var ChatComponent = ({ app, settings }) => {
       if (reader) {
         while (true) {
           const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
+          if (done) {
+            buffer += decoder.decode();
+            if (buffer.trim()) {
+              buffer += "\n\n";
+            }
+          }
+          if (!done) {
+            buffer += decoder.decode(value, { stream: true });
+          }
           const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
+          buffer = done ? "" : lines.pop() || "";
           for (let rawLine of lines) {
             rawLine = rawLine.replace(/\r$/, "");
             if (rawLine.startsWith("data:")) {
@@ -21934,6 +21950,7 @@ var ChatComponent = ({ app, settings }) => {
               }
             }
           }
+          if (done) break;
         }
       }
     } catch (err) {
@@ -22297,7 +22314,7 @@ var ChatComponent = ({ app, settings }) => {
                 /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "local", children: "Modo Local (Vault)" }),
                 /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "web", children: "Modo Web (Scraper)" }),
                 /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "hybrid", children: "Modo H\xEDbrido (Pro)" }),
-                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "blueprint", children: "Blueprints (Commands)" })
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "blueprint", children: "Blueprints (/roadmap, /synergy, /explore, /organize)" })
               ]
             }
           ),
@@ -22386,17 +22403,31 @@ var ChatComponent = ({ app, settings }) => {
                 currentMode === "local" && currentAgent.includes("Visionario") && "\u{1F4A1}",
                 currentMode === "web" && "\u{1F310}",
                 currentMode === "hybrid" && "\u{1F91D}",
-                currentMode === "blueprint" && "\u{1F5FA}\uFE0F"
+                currentMode === "blueprint" && "\u{1F4DA}"
               ] }),
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", { style: { margin: "0 0 10px 0", color: "var(--text-normal)" }, children: currentMode === "local" ? "Interrogatorio Local" : currentMode === "web" ? "Investigaci\xF3n Aut\xF3noma" : currentMode === "hybrid" ? "An\xE1lisis H\xEDbrido 360" : "Ejecuci\xF3n Multi-Agente" }),
-              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { style: { fontSize: "0.9em", maxWidth: "80%" }, children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", { style: { margin: "0 0 10px 0", color: "var(--text-normal)" }, children: currentMode === "local" ? "Interrogatorio Local" : currentMode === "web" ? "Investigaci\xF3n Aut\xF3noma" : currentMode === "hybrid" ? "An\xE1lisis H\xEDbrido 360" : "Blueprints MI-AI" }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { style: { fontSize: "0.9em", maxWidth: "85%", lineHeight: 1.45 }, children: [
                 currentMode === "local" && currentAgent.includes("Detective") && "Extraer\xE9 datos y hechos precisos desde el contexto de tus notas locales sin interpretaci\xF3n.",
                 currentMode === "local" && currentAgent.includes("Editor") && "Tomar\xE9 tus notas y redactar\xE9 un nuevo resumen ejecutivo coherente y con narrativa.",
                 currentMode === "local" && currentAgent.includes("Cr\xEDtico") && "Buscar\xE9 brechas de informaci\xF3n t\xE9cnica y contradicciones ocultas en tus recortes.",
                 currentMode === "local" && currentAgent.includes("Visionario") && "Proyectar\xE9 el futuro y propondr\xE9 innovaciones disruptivas usando de base tus notas.",
                 currentMode === "web" && "Saldr\xE9 a internet, buscar\xE9 fuentes, extraer\xE9 contexto de las mejores y simular\xE9 un debate interno para darte la respuesta m\xE1s rica.",
                 currentMode === "hybrid" && "Revisar\xE9 tus notas locales y si detecto vac\xEDos saldr\xE9 a internet para comparar y complementar la informaci\xF3n con datos externos.",
-                currentMode === "blueprint" && "Orquestar\xE9 un escuadr\xF3n pre-programado. Comandos: '/roadmap [tema]', '/synergy [temas]', o '/organize [Ruta_Carpeta]'."
+                currentMode === "blueprint" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "/explore" }),
+                  " lanza b\xFAsquedas acad\xE9micas por ",
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "ejes" }),
+                  " (cada concepto, cada par de conceptos y, si aplica, la combinaci\xF3n completa) en arXiv y web acad\xE9mica, fusiona resultados y genera un informe con s\xEDntesis cruzada.",
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("br", {}),
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("br", {}),
+                  "Tambi\xE9n: ",
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { style: { fontSize: "0.88em" }, children: "/roadmap [tema]" }),
+                  ", ",
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { style: { fontSize: "0.88em" }, children: "/synergy [t1, t2, \u2026]" }),
+                  " (sinergias h\xEDbrido local+web), ",
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { style: { fontSize: "0.88em" }, children: "/organize" }),
+                  " (vault incremental)."
+                ] })
               ] })
             ] }),
             messages.map((m, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: {
@@ -22460,14 +22491,32 @@ var ChatComponent = ({ app, settings }) => {
         borderRadius: "4px",
         color: "var(--text-muted)"
       }, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "\u{1F52E} Blueprints:" }),
-        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", { style: { margin: "4px 0", paddingLeft: "16px" }, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "/roadmap [tema]" }) }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "/synergy [tema1, tema2]" }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "\u{1F52E} Blueprints" }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", { style: { margin: "6px 0 8px 0", paddingLeft: "16px", lineHeight: 1.5 }, children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "/explore [c1, c2, \u2026]" }),
+            " \u2014 ",
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "exploraci\xF3n literaria multi-concepto" }),
+            " (2\u20135 t\xE9rminos separados por comas). B\xFAsqueda por ejes acad\xE9micos, informe y guardado en ",
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "MI-AI Reports" }),
+            "."
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "/roadmap [tema]" }),
+            " \u2014 roadmap de investigaci\xF3n (local + web)."
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "/synergy [tema1, tema2]" }),
+            " \u2014 matriz de sinergias (vault + web por tema)."
+          ] }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "/organize" }),
-            " \u2014 organiza todo el vault (incremental)"
+            " \u2014 organiza el vault de forma incremental."
           ] })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { fontSize: "0.92em", color: "var(--text-normal)", opacity: 0.9 }, children: [
+          "Ejemplo: ",
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "/explore quantitative modeling, microstructures, finance" })
         ] })
       ] }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: {
@@ -22486,7 +22535,7 @@ var ChatComponent = ({ app, settings }) => {
             value: input,
             onChange: (e) => setInput(e.target.value),
             onKeyDown: (e) => e.key === "Enter" && handleSend(),
-            placeholder: "...",
+            placeholder: currentMode === "blueprint" ? "/explore concepto1, concepto2, concepto3" : "...",
             style: {
               flex: 1,
               background: "transparent",

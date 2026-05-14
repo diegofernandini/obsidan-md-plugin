@@ -123,127 +123,130 @@ async def chat(chat_request: ChatRequest, request: Request):
         try:
             # Función auxiliar para asegurar que el vault esté indexado
             async def ensure_vault_indexed():
-            if chat_request.vault_path and ingestor.vectorstore is None:
-                yield {"data": "LOG: Construyendo Segunda Memoria (Indexando Vault por primera vez). Esto tomará un momento..."}
-                try:
-                    texts = await loop.run_in_executor(None, ingestor.load_local_data, chat_request.vault_path)
-                    if texts:
-                        await loop.run_in_executor(None, ingestor.index_data, texts, "VAULT", "vault_index")
-                        yield {"data": "LOG: Vault indexado correctamente."}
-                    else:
-                        yield {"data": "LOG: No se encontraron documentos válidos en el Vault."}
-                except Exception as e:
-                    print(f"Error indexando vault: {e}")
-                    yield {"data": f"LOG: Error al indexar el Vault: {e}"}
+                if chat_request.vault_path and ingestor.vectorstore is None:
+                    yield {"data": "LOG: Construyendo Segunda Memoria (Indexando Vault por primera vez). Esto tomará un momento..."}
+                    try:
+                        texts = await loop.run_in_executor(None, ingestor.load_local_data, chat_request.vault_path)
+                        if texts:
+                            await loop.run_in_executor(None, ingestor.index_data, texts, "VAULT", "vault_index")
+                            yield {"data": "LOG: Vault indexado correctamente."}
+                        else:
+                            yield {"data": "LOG: No se encontraron documentos válidos en el Vault."}
+                    except Exception as e:
+                        print(f"Error indexando vault: {e}")
+                        yield {"data": f"LOG: Error al indexar el Vault: {e}"}
 
             # 1. MODO LOCAL (RAG Vault)
             if chat_request.mode == "local":
-            context = ""
-            if chat_request.vault_path:
+                context = ""
+                if chat_request.vault_path:
+                    try:
+                        async for msg in ensure_vault_indexed():
+                            yield msg
+                        if ingestor.vectorstore is not None:
+                            retriever = ingestor.get_retriever()
+                            docs = await loop.run_in_executor(None, retriever.invoke, chat_request.message)
+                            context_blocks = []
+                            for d in docs:
+                                source_file = d.metadata.get("source", "Nota Local Desconocida")
+                                # Limpiar path, nos quedamos con el nombre del archivo
+                                basename = str(source_file).split("/")[-1]
+                                if basename.endswith(".md"):
+                                    basename = basename[:-3]
+                                context_blocks.append(f"--- ARCHIVO ORIGEN: {basename} ---\n{d.page_content}")
+                            context = "\n\n".join(context_blocks)
+                    except Exception as e:
+                        print(f"Error recuperando contexto: {e}")
+
+                if chat_request.active_note_content:
+                    context += f"\n\n--- NOTA ACTIVA (Para Contexto/Edición) ---\n{chat_request.active_note_content}"
+
+                system_prompt = "Eres un asistente de inteligencia de mercado experto. SIEMPRE debes citar tus fuentes usando el formato [[Nombre de la Nota]] para archivos locales y [Título](URL) para enlaces web. Al final de tu respuesta, incluye siempre una sección de '## Bibliografía'."
+                if "Detective" in chat_request.agent_role:
+                    system_prompt = "Tu enfoque es forense. No interpretas; extraes datos puros y citas SIEMPRE el origen usando [[Wikilinks]]. Incluye bibliografía final."
+                elif "Editor" in chat_request.agent_role:
+                    system_prompt = "Tu función es dar cohesión y narrativa. Estructuras reportes profesionales e incluyes SIEMPRE una sección de '## Bibliografía' al final detallando las fuentes."
+
+                yield {"data": "LOG: Analizando el contexto local..."}
+                async for chunk in agent_manager.stream_agent_task(chat_request.agent_role, system_prompt, context, chat_request.message):
+                    if await request.is_disconnected():
+                        break
+                    yield {"data": chunk}
+
+            # 2. MODO WEB (Investigador Autónomo)
+            elif chat_request.mode == "web":
+                yield {"data": "LOG: Generando estrategia de búsqueda global..."}
+                queries = agent_manager.generate_search_queries(chat_request.message)
+
+                yield {"data": "LOG: Consultando fuentes académicas y generales..."}
+                search_results = await loop.run_in_executor(None, ingestor.get_combined_research, queries)
+
+                yield {"data": "LOG: Seleccionando las fuentes más relevantes..."}
+                selected_sources = agent_manager.select_best_sources(search_results, chat_request.message)
+
+                if not selected_sources:
+                    yield {"data": "RESULT: El investigador no encontró fuentes suficientemente relevantes para este tema."}
+                    return
+
+                research_contents = []
+                for i, source in enumerate(selected_sources):
+                    yield {"data": f"LOG: Analizando contenido de {source['title']}..."}
+                    content = await loop.run_in_executor(None, ingestor.scrape_url, source["url"])
+                    research_contents.append(content)
+
+                yield {"data": "LOG: Iniciando debate de contraste..." if len(research_contents) >= 2 else "LOG: Sintetizando hallazgos..."}
+                if len(research_contents) >= 2:
+                    report = await loop.run_in_executor(None, agent_manager.conduct_contrast_analysis, research_contents[0], research_contents[1], chat_request.message)
+                else:
+                    report = await loop.run_in_executor(None, agent_manager.synthesize_report, research_contents[0], chat_request.message)
+
+                bibliography = "\n\n## Bibliografía\n" + "\n".join([f"- [{s.get('title', 'Fuente Web')}]({s['url']})" for s in selected_sources])
+                yield {"data": f"RESULT: {report}{bibliography}"}
+
+            # 3. MODO HÍBRIDO (Vault + Web)
+            elif chat_request.mode == "hybrid":
+                yield {"data": "LOG: Validando memoria local (Vault)..."}
+                local_context = ""
                 try:
                     async for msg in ensure_vault_indexed():
                         yield msg
                     if ingestor.vectorstore is not None:
                         retriever = ingestor.get_retriever()
-                        docs = await loop.run_in_executor(None, retriever.invoke, chat_request.message)
+                        local_docs = await loop.run_in_executor(None, retriever.invoke, chat_request.message)
                         context_blocks = []
-                        for d in docs:
-                            source_file = d.metadata.get('source', 'Nota Local Desconocida')
-                            # Limpiar path, nos quedamos con el nombre del archivo
-                            basename = str(source_file).split('/')[-1]
-                            if basename.endswith('.md'): basename = basename[:-3]
+                        for d in local_docs:
+                            source_file = d.metadata.get("source", "Nota Local Desconocida")
+                            basename = str(source_file).split("/")[-1]
+                            if basename.endswith(".md"):
+                                basename = basename[:-3]
                             context_blocks.append(f"--- ARCHIVO ORIGEN: {basename} ---\n{d.page_content}")
-                        context = "\n\n".join(context_blocks)
+                        local_context = "\n\n".join(context_blocks)
                 except Exception as e:
-                    print(f"Error recuperando contexto: {e}")
-            
-            if chat_request.active_note_content:
-                context += f"\n\n--- NOTA ACTIVA (Para Contexto/Edición) ---\n{chat_request.active_note_content}"
+                    print(f"Error recuperando contexto híbrido: {e}")
 
-            system_prompt = "Eres un asistente de inteligencia de mercado experto. SIEMPRE debes citar tus fuentes usando el formato [[Nombre de la Nota]] para archivos locales y [Título](URL) para enlaces web. Al final de tu respuesta, incluye siempre una sección de '## Bibliografía'."
-            if "Detective" in chat_request.agent_role:
-                 system_prompt = "Tu enfoque es forense. No interpretas; extraes datos puros y citas SIEMPRE el origen usando [[Wikilinks]]. Incluye bibliografía final."
-            elif "Editor" in chat_request.agent_role:
-                 system_prompt = "Tu función es dar cohesión y narrativa. Estructuras reportes profesionales e incluyes SIEMPRE una sección de '## Bibliografía' al final detallando las fuentes."
+                yield {"data": "LOG: Lanzando investigación web complementaria..."}
+                queries = agent_manager.generate_search_queries(chat_request.message)
+                search_results = await loop.run_in_executor(None, ingestor.get_combined_research, queries)
+                selected_web = agent_manager.select_best_sources(search_results, chat_request.message)
 
-            yield {"data": "LOG: Analizando el contexto local..."}
-            async for chunk in agent_manager.stream_agent_task(chat_request.agent_role, system_prompt, context, chat_request.message):
+                web_contents = []
+                for source in selected_web:
+                    yield {"data": f"LOG: Cruzando información con {source['title']}..."}
+                    web_contents.append(await loop.run_in_executor(None, ingestor.scrape_url, source["url"]))
 
-                if await request.is_disconnected(): break
-                yield {"data": chunk}
+                yield {"data": "LOG: Agente Híbrido resolviendo conflictos y sintetizando..."}
+                report = await loop.run_in_executor(None, agent_manager.conduct_hybrid_analysis, local_context, web_contents, "I", chat_request.message)
 
-            # 2. MODO WEB (Investigador Autónomo)
-            elif chat_request.mode == "web":
-            yield {"data": "LOG: Generando estrategia de búsqueda global..."}
-            queries = agent_manager.generate_search_queries(chat_request.message)
-            
-            yield {"data": "LOG: Consultando fuentes académicas y generales..."}
-            search_results = await loop.run_in_executor(None, ingestor.get_combined_research, queries)
-            
-            yield {"data": "LOG: Seleccionando las fuentes más relevantes..."}
-            selected_sources = agent_manager.select_best_sources(search_results, chat_request.message)
-            
-            if not selected_sources:
-                yield {"data": "RESULT: El investigador no encontró fuentes suficientemente relevantes para este tema."}
-                return
+                # Post-procesamiento estricto: Eliminar alucinaciones del formato por defecto de Llama
+                report = report.replace("[Fuente interna]", "")
+                report = report.replace("[Fuente externa]", "")
+                report = report.replace("[Fuente Externa]", "")
+                report = report.replace("[Fuente Interna]", "")
 
-            research_contents = []
-            for i, source in enumerate(selected_sources):
-                yield {"data": f"LOG: Analizando contenido de {source['title']}..."}
-                content = await loop.run_in_executor(None, ingestor.scrape_url, source['url'])
-                research_contents.append(content)
-
-            yield {"data": "LOG: Iniciando debate de contraste..." if len(research_contents) >= 2 else "LOG: Sintetizando hallazgos..."}
-            
-            if len(research_contents) >= 2:
-                report = await loop.run_in_executor(None, agent_manager.conduct_contrast_analysis, research_contents[0], research_contents[1], chat_request.message)
+                bibliography = "\n\n## Bibliografía\n" + "\n".join([f"- [{s.get('title', 'Fuente Web')}]({s['url']})" for s in selected_web])
+                yield {"data": f"RESULT: {report}{bibliography}"}
             else:
-                report = await loop.run_in_executor(None, agent_manager.synthesize_report, research_contents[0], chat_request.message)
-            
-            bibliography = "\n\n## Bibliografía\n" + "\n".join([f"- [{s.get('title', 'Fuente Web')}]({s['url']})" for s in selected_sources])
-            yield {"data": f"RESULT: {report}{bibliography}"}
-
-            # 3. MODO HÍBRIDO (Vault + Web)
-            elif chat_request.mode == "hybrid":
-            yield {"data": "LOG: Validando memoria local (Vault)..."}
-            local_context = ""
-            try:
-                async for msg in ensure_vault_indexed():
-                    yield msg
-                if ingestor.vectorstore is not None:
-                    retriever = ingestor.get_retriever()
-                    local_docs = await loop.run_in_executor(None, retriever.invoke, chat_request.message)
-                    context_blocks = []
-                    for d in local_docs:
-                        source_file = d.metadata.get('source', 'Nota Local Desconocida')
-                        basename = str(source_file).split('/')[-1]
-                        if basename.endswith('.md'): basename = basename[:-3]
-                        context_blocks.append(f"--- ARCHIVO ORIGEN: {basename} ---\n{d.page_content}")
-                    local_context = "\n\n".join(context_blocks)
-            except Exception as e:
-                print(f"Error recuperando contexto híbrido: {e}")
-
-            yield {"data": "LOG: Lanzando investigación web complementaria..."}
-            queries = agent_manager.generate_search_queries(chat_request.message)
-            search_results = await loop.run_in_executor(None, ingestor.get_combined_research, queries)
-            selected_web = agent_manager.select_best_sources(search_results, chat_request.message)
-            
-            web_contents = []
-            for source in selected_web:
-                yield {"data": f"LOG: Cruzando información con {source['title']}..."}
-                web_contents.append(await loop.run_in_executor(None, ingestor.scrape_url, source['url']))
-
-            yield {"data": "LOG: Agente Híbrido resolviendo conflictos y sintetizando..."}
-            report = await loop.run_in_executor(None, agent_manager.conduct_hybrid_analysis, local_context, web_contents, "I", chat_request.message)
-            
-            # Post-procesamiento estricto: Eliminar alucinaciones del formato por defecto de Llama
-            report = report.replace("[Fuente interna]", "")
-            report = report.replace("[Fuente externa]", "")
-            report = report.replace("[Fuente Externa]", "")
-            report = report.replace("[Fuente Interna]", "")
-
-            bibliography = "\n\n## Bibliografía\n" + "\n".join([f"- [{s.get('title', 'Fuente Web')}]({s['url']})" for s in selected_web])
-            yield {"data": f"RESULT: {report}{bibliography}"}
+                yield {"data": "RESULT: Modo de chat no soportado. Usa local, web o hybrid."}
         except Exception as e:
             error_trace = traceback.format_exc()
             logging.error(f"ERROR EN CHAT ({chat_request.mode}): {str(e)}\n{error_trace}")
@@ -255,42 +258,57 @@ async def chat(chat_request: ChatRequest, request: Request):
 @app.post("/blueprint/roadmap")
 async def blueprint_roadmap(request: ChatRequest, fastapi_request: Request):
     async def event_generator():
-        # Cola para recibir logs de forma asíncrona
         queue = asyncio.Queue()
-        loop = asyncio.get_running_loop() # Capturamos el loop actual
+        loop = asyncio.get_running_loop()
 
         def log_to_queue(msg):
-            # Usamos el loop capturado para enviar el mensaje a la cola de forma segura
             loop.call_soon_threadsafe(queue.put_nowait, msg)
 
-        try:
-            engine = BlueprintEngine(model_name=MODEL_NAME, log_callback=log_to_queue)
-            yield {"data": "LOG: 🧠 Motor MI-AI Sincronizado. Iniciando Roadmap..."}
-        
-        vault_path = request.vault_path
-        # Ejecutar blueprint en un hilo separado
-        executor_task = loop.run_in_executor(None, engine.run_research_roadmap, request.message, vault_path)
+        # Send first event immediately to keep connection alive
+        yield {"data": "LOG: 🧠 Motor MI-AI Sincronizado. Iniciando Roadmap..."}
+        await asyncio.sleep(0)  # flush to client
 
-        last_heartbeat = asyncio.get_event_loop().time()
-        while not executor_task.done() or not queue.empty():
-            try:
-                # Esperar logs o finalizar
-                msg = await asyncio.wait_for(queue.get(), timeout=2.0)
-                yield {"data": f"LOG: {msg}"}
-                last_heartbeat = asyncio.get_event_loop().time()
-            except asyncio.TimeoutError:
-                # Heartbeat si han pasado más de 10 seg
-                if asyncio.get_event_loop().time() - last_heartbeat > 10:
-                    yield {"comment": "ping"}
-                    last_heartbeat = asyncio.get_event_loop().time()
-                    
-                if await fastapi_request.is_disconnected():
+        try:
+            engine = BlueprintEngine(model_name=MODEL_NAME, log_callback=log_to_queue, agent_manager=agent_manager, ingestor=ingestor)
+
+            vault_path = request.vault_path
+            executor_task = loop.run_in_executor(None, engine.run_research_roadmap, request.message, vault_path)
+
+            last_heartbeat = loop.time()
+            disconnected = False
+            while True:
+                # Drain all pending log messages before checking if done
+                while not queue.empty():
+                    msg = queue.get_nowait()
+                    yield {"data": f"LOG: {msg}"}
+                    last_heartbeat = loop.time()
+
+                if executor_task.done():
                     break
 
+                try:
+                    msg = await asyncio.wait_for(queue.get(), timeout=2.0)
+                    yield {"data": f"LOG: {msg}"}
+                    last_heartbeat = loop.time()
+                except asyncio.TimeoutError:
+                    if loop.time() - last_heartbeat > 10:
+                        yield {"comment": "ping"}
+                        last_heartbeat = loop.time()
+
+                    if await fastapi_request.is_disconnected():
+                        logging.warning("Cliente desconectado durante Roadmap.")
+                        executor_task.cancel()
+                        disconnected = True
+                        break
+            if disconnected:
+                return
             result = await executor_task
             yield {"data": f"RESULT: {result['report']}"}
             yield {"data": f"TRANSCRIPT: {result['transcript']}"}
             await save_to_vault(request.vault_path, f"ROADMAP_{request.message[:20]}", result['report'])
+        except BrokenPipeError:
+            logging.warning("Broken pipe: cliente desconectado durante Roadmap.")
+            return
         except Exception as e:
             error_trace = traceback.format_exc()
             logging.error(f"ERROR EN ROADMAP: {str(e)}\n{error_trace}")
@@ -304,7 +322,7 @@ async def blueprint_synergy(request: Request):
     data = await request.json()
     topics = data.get("topics", [])
     vault_path = data.get("vault_path")
-    
+
     async def event_generator():
         queue = asyncio.Queue()
         loop = asyncio.get_running_loop()
@@ -312,42 +330,128 @@ async def blueprint_synergy(request: Request):
         def log_to_queue(msg):
             loop.call_soon_threadsafe(queue.put_nowait, msg)
 
+        # Send first event immediately to keep connection alive
+        yield {"data": "LOG: 🧠 Motor MI-AI Sincronizado. Iniciando análisis..."}
+        await asyncio.sleep(0)
+
         try:
-            import traceback
-            # Pre-instanciar motor ANTES de empezar el yield fuerte
-            engine = BlueprintEngine(model_name=MODEL_NAME, log_callback=log_to_queue)
-            
-            # Pulsar inmediatamente para asegurar el canal SSE
-            yield {"data": "LOG: 🧠 Motor MI-AI Sincronizado. Iniciando análisis..."}
-            
+            engine = BlueprintEngine(model_name=MODEL_NAME, log_callback=log_to_queue, agent_manager=agent_manager, ingestor=ingestor)
+
             executor_task = loop.run_in_executor(None, engine.run_synergy_matrix, topics, vault_path)
 
-            last_heartbeat = asyncio.get_event_loop().time()
-            while not executor_task.done() or not queue.empty():
+            last_heartbeat = loop.time()
+            disconnected = False
+            while True:
+                # Drain all pending log messages before checking if done
+                while not queue.empty():
+                    msg = queue.get_nowait()
+                    yield {"data": f"LOG: {msg}"}
+                    last_heartbeat = loop.time()
+
+                if executor_task.done():
+                    break
+
                 try:
-                    # Esperar un mensaje de log
                     msg = await asyncio.wait_for(queue.get(), timeout=1.0)
                     yield {"data": f"LOG: {msg}"}
-                    last_heartbeat = asyncio.get_event_loop().time()
+                    last_heartbeat = loop.time()
                 except asyncio.TimeoutError:
-                    # Enviar heartbeat si han pasado más de 10 segundos sin actividad
-                    now = asyncio.get_event_loop().time()
-                    if now - last_heartbeat > 10:
+                    if loop.time() - last_heartbeat > 10:
                         yield {"comment": "ping"}
-                        last_heartbeat = now
-                    
+                        last_heartbeat = loop.time()
+
                     if await request.is_disconnected():
-                        print("📡 Cliente desconectado prematuramente.")
+                        logging.warning("Cliente desconectado durante Sinergia.")
+                        executor_task.cancel()
+                        disconnected = True
                         break
-            
+            if disconnected:
+                return
             result = await executor_task
             yield {"data": f"RESULT: {result['report']}"}
+        except BrokenPipeError:
+            logging.warning("Broken pipe: cliente desconectado durante Sinergia.")
+            return
         except Exception as e:
             error_trace = traceback.format_exc()
             logging.error(f"ERROR EN SINERGIA: {str(e)}\n{error_trace}")
-            print(f"❌ ERROR CRÍTICO EN SINERGIA:\n{error_trace}")
-            yield {"data": f"LOG: ❌ Error crítico (Ver consola): {str(e)}"}
+            yield {"data": f"LOG: ❌ Error crítico (Ver log): {str(e)}"}
             yield {"data": f"RESULT: Lo siento, ocurrió un error al procesar la sinergia. Detalles: {str(e)}"}
+
+    return EventSourceResponse(event_generator())
+
+@app.post("/blueprint/explore")
+async def blueprint_explore(request: Request):
+    data = await request.json()
+    topics = data.get("topics", [])
+    vault_path = data.get("vault_path")
+
+    async def event_generator():
+        queue = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        def log_to_queue(msg):
+            loop.call_soon_threadsafe(queue.put_nowait, msg)
+
+        yield {"data": "LOG: 🧠 Motor MI-AI Sincronizado. Exploración literaria multi-concepto..."}
+        await asyncio.sleep(0)
+
+        try:
+            engine = BlueprintEngine(
+                model_name=MODEL_NAME,
+                log_callback=log_to_queue,
+                agent_manager=agent_manager,
+                ingestor=ingestor,
+            )
+
+            executor_task = loop.run_in_executor(
+                None, engine.run_literature_relation_exploration, topics, vault_path
+            )
+
+            last_heartbeat = loop.time()
+            disconnected = False
+            while True:
+                while not queue.empty():
+                    msg = queue.get_nowait()
+                    yield {"data": f"LOG: {msg}"}
+                    last_heartbeat = loop.time()
+
+                if executor_task.done():
+                    break
+
+                try:
+                    msg = await asyncio.wait_for(queue.get(), timeout=1.0)
+                    yield {"data": f"LOG: {msg}"}
+                    last_heartbeat = loop.time()
+                except asyncio.TimeoutError:
+                    if loop.time() - last_heartbeat > 10:
+                        yield {"comment": "ping"}
+                        last_heartbeat = loop.time()
+
+                    if await request.is_disconnected():
+                        logging.warning("Cliente desconectado durante Explore.")
+                        executor_task.cancel()
+                        disconnected = True
+                        break
+            if disconnected:
+                return
+            result = await executor_task
+            yield {"data": f"RESULT: {result['report']}"}
+            yield {"data": f"TRANSCRIPT: {result['transcript']}"}
+            slug = "_".join(
+                (str(t) or "").replace(" ", "_")[:14] for t in (topics or [])[:3]
+            )[:48] or "concepts"
+            await save_to_vault(vault_path, f"EXPLORE_{slug}", result["report"])
+        except BrokenPipeError:
+            logging.warning("Broken pipe: cliente desconectado durante Explore.")
+            return
+        except Exception as e:
+            error_trace = traceback.format_exc()
+            logging.error(f"ERROR EN EXPLORE: {str(e)}\n{error_trace}")
+            yield {"data": f"LOG: ❌ Error crítico (Ver log): {str(e)}"}
+            yield {
+                "data": f"RESULT: Lo siento, ocurrió un error en la exploración literaria. Detalles: {str(e)}"
+            }
 
     return EventSourceResponse(event_generator())
 
@@ -360,20 +464,44 @@ async def blueprint_organize(request: ChatRequest, fastapi_request: Request):
         def log_to_queue(msg):
             loop.call_soon_threadsafe(queue.put_nowait, msg)
 
-        engine = BlueprintEngine(model_name=MODEL_NAME, log_callback=log_to_queue)
+        # Send first event immediately to keep connection alive
+        yield {"data": "LOG: 🧠 Motor MI-AI Sincronizado. Iniciando organización incremental..."}
+        await asyncio.sleep(0)
 
-        # Ejecutar blueprint en un hilo separado con solo vault_path (modo incremental)
-        executor_task = loop.run_in_executor(None, engine.run_batch_organize, request.vault_path)
+        try:
+            engine = BlueprintEngine(model_name=MODEL_NAME, log_callback=log_to_queue, agent_manager=agent_manager, ingestor=ingestor)
 
-        while not executor_task.done() or not queue.empty():
-            try:
-                msg = await asyncio.wait_for(queue.get(), timeout=0.1)
-                yield {"data": msg}
-            except asyncio.TimeoutError:
-                continue
+            executor_task = loop.run_in_executor(None, engine.run_batch_organize, request.vault_path)
+            last_heartbeat = loop.time()
+            disconnected = False
 
-        result = executor_task.result()
-        yield {"data": f"RESULT: {result['report']}"}
+            while not executor_task.done() or not queue.empty():
+                try:
+                    msg = await asyncio.wait_for(queue.get(), timeout=2.0)
+                    yield {"data": f"LOG: {msg}"}
+                    last_heartbeat = loop.time()
+                except asyncio.TimeoutError:
+                    if loop.time() - last_heartbeat > 10:
+                        yield {"comment": "ping"}
+                        last_heartbeat = loop.time()
+
+                    if await fastapi_request.is_disconnected():
+                        logging.warning("Cliente desconectado durante Organize.")
+                        executor_task.cancel()
+                        disconnected = True
+                        break
+            if disconnected:
+                return
+            result = await executor_task
+            yield {"data": f"RESULT: {result['report']}"}
+        except BrokenPipeError:
+            logging.warning("Broken pipe: cliente desconectado durante Organize.")
+            return
+        except Exception as e:
+            error_trace = traceback.format_exc()
+            logging.error(f"ERROR EN ORGANIZE: {str(e)}\n{error_trace}")
+            yield {"data": f"LOG: ❌ Error crítico (Ver log): {str(e)}"}
+            yield {"data": f"RESULT: Lo siento, ocurrió un error organizando la bóveda. Detalles: {str(e)}"}
 
     return EventSourceResponse(event_generator())
 

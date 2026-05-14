@@ -1,4 +1,6 @@
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, Tuple
+from itertools import combinations
+import time
 from src.agent_manager import AgentManager
 from src.data_ingestor import DataIngestor
 import os
@@ -8,9 +10,9 @@ class BlueprintEngine:
     """
     Orquesta flujos de trabajo multi-agente complejos (Blueprints).
     """
-    def __init__(self, model_name: str = "llama3.1", log_callback=None):
-        self.agent_manager = AgentManager(model_name=model_name)
-        self.ingestor = DataIngestor()
+    def __init__(self, model_name: str = "llama3.1", log_callback=None, agent_manager=None, ingestor=None):
+        self.agent_manager = agent_manager or AgentManager(model_name=model_name)
+        self.ingestor = ingestor or DataIngestor()
         self.log_callback = log_callback
 
     def _log(self, message: str):
@@ -204,6 +206,242 @@ class BlueprintEngine:
             "report": full_report,
             "transcript": "\n".join(log)
         }
+
+    def _normalize_explore_concepts(self, topics: List[str]) -> Tuple[List[str], Optional[str]]:
+        """
+        Devuelve (conceptos_ok, mensaje_error). Entre 2 y 5 conceptos no vacíos.
+        """
+        if not topics:
+            return [], "Se requieren al menos 2 conceptos separados por comas."
+        cleaned = [t.strip() for t in topics if t and str(t).strip()]
+        if len(cleaned) < 2:
+            return [], "Se requieren al menos 2 conceptos no vacíos."
+        if len(cleaned) > 5:
+            # Plan: máximo 5; truncar con aviso
+            cleaned = cleaned[:5]
+        return cleaned, None
+
+    def _build_literature_search_axes(self, concepts: List[str]) -> List[Tuple[str, str]]:
+        """
+        Ejes deterministas: un single por concepto, pares (cap 6 si n=5), y eje full si n<=4.
+        Cada tupla es (etiqueta_eje, query_en_ingles).
+        """
+        axes: List[Tuple[str, str]] = []
+        for c in concepts:
+            axes.append((f"single:{c}", c.strip()))
+
+        pair_list = list(combinations(concepts, 2))
+        if len(concepts) == 5 and len(pair_list) > 6:
+            pair_list = pair_list[:6]
+
+        for a, b in pair_list:
+            q = f'relationship between "{a}" and "{b}" interdisciplinary research'
+            axes.append((f"pair:{a}|{b}", q))
+
+        if 2 <= len(concepts) <= 4:
+            quoted = " ".join(f'"{c}"' for c in concepts)
+            axes.append(
+                (f"full:{'+'.join(concepts)}", f"{quoted} survey systematic review interdisciplinary")
+            )
+        return axes
+
+    def _dedupe_hits_by_url(self, hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        by_url: Dict[str, Dict[str, Any]] = {}
+        for h in hits:
+            url = h.get("url") or ""
+            if not url:
+                continue
+            axis = h.get("axis", "")
+            if url not in by_url:
+                row = {k: v for k, v in h.items() if k != "axis"}
+                row["axes"] = [axis] if axis else []
+                by_url[url] = row
+            else:
+                if axis and axis not in by_url[url]["axes"]:
+                    by_url[url]["axes"].append(axis)
+        return list(by_url.values())
+
+    def run_literature_relation_exploration(
+        self, topics: List[str], vault_path: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Blueprint: exploración multi-concepto por literatura (fan-out académico).
+
+        A diferencia de `/synergy`, que investiga cada tema en paralelo y luego busca
+        sinergias en texto ya resumido, este flujo lanza consultas explícitas por eje
+        (concepto suelto, pares, y tupla completa si n<=4) contra arXiv y búsqueda
+        académica, fusiona resultados y produce un informe por eje más síntesis cruzada.
+        """
+        log: List[str] = []
+        non_empty = [str(t).strip() for t in (topics or []) if t and str(t).strip()]
+        if len(non_empty) > 5:
+            self._log("⚠️ Más de 5 conceptos en entrada; se usarán solo los 5 primeros.")
+        concepts, err = self._normalize_explore_concepts(topics)
+        if err:
+            self._log(f"❌ {err}")
+            return {"report": f"# Error\n\n{err}", "transcript": err}
+
+        combined_label = ", ".join(concepts)
+        self._log(
+            f"\n🚀 Blueprint: EXPLORACIÓN LITERARIA MULTI-CONCEPTO ({len(concepts)} conceptos)"
+        )
+        log.append("--- INICIO: EXPLORACIÓN LITERARIA (RELACIONES) ---")
+        log.append(f"Conceptos: {combined_label}")
+        if len(non_empty) > 5:
+            log.append("Aviso: entrada con más de 5 conceptos; truncado a 5.")
+
+        axes = self._build_literature_search_axes(concepts)
+        self._log(f"📐 Ejes de búsqueda definidos: {len(axes)}")
+        log.append(f"Paso 0: {len(concepts)} conceptos, {len(axes)} ejes de consulta.")
+
+        all_hits: List[Dict[str, Any]] = []
+        axis_buckets: Dict[str, List[Dict[str, Any]]] = {label: [] for label, _ in axes}
+
+        ARXIV_N = 2
+        ACAD_N = 2
+
+        for axis_label, en_query in axes:
+            self._log(f"🔎 Eje [{axis_label}]: {en_query[:120]}...")
+            try:
+                chunk: List[Dict[str, Any]] = []
+                try:
+                    chunk.extend(self.ingestor.search_arxiv(en_query, max_results=ARXIV_N))
+                except Exception as ex:
+                    self._log(f"⚠️ arXiv falló en eje {axis_label}: {ex}")
+                    log.append(f"arXiv error [{axis_label}]: {ex}")
+                try:
+                    chunk.extend(
+                        self.ingestor.search_academic(en_query, max_results=ACAD_N)
+                    )
+                except Exception as ex:
+                    self._log(f"⚠️ búsqueda académica falló en eje {axis_label}: {ex}")
+                    log.append(f"Academic DDG error [{axis_label}]: {ex}")
+
+                for h in chunk:
+                    row = dict(h)
+                    row["axis"] = axis_label
+                    all_hits.append(row)
+                    axis_buckets[axis_label].append(dict(h))
+
+            except Exception as ex:
+                self._log(f"⚠️ Eje completo falló [{axis_label}]: {ex}")
+                log.append(f"Eje fallido [{axis_label}]: {ex}")
+
+            time.sleep(0.35)
+
+        deduped = self._dedupe_hits_by_url(all_hits)
+        self._log(f"📚 URLs únicas tras fusión: {len(deduped)}")
+        log.append(f"Paso 1: {len(deduped)} fuentes únicas (todas las ejes).")
+
+        for_llm = []
+        for d in deduped:
+            for_llm.append(
+                {
+                    "title": d.get("title", ""),
+                    "summary": d.get("summary", ""),
+                    "url": d.get("url", ""),
+                    "source": d.get("source", ""),
+                }
+            )
+
+        if not for_llm:
+            msg = "No se recuperaron fuentes en ningún eje. Prueba otros términos o revisa la conexión."
+            self._log(f"❌ {msg}")
+            log.append(msg)
+            return {
+                "report": f"# Exploración literaria: {combined_label}\n\n{msg}",
+                "transcript": "\n".join(log),
+            }
+
+        self._log("🧭 Curación global de fuentes (LLM)...")
+        selected = self.agent_manager.select_best_sources(for_llm, combined_label)
+        selected_urls = {s["url"] for s in selected}
+        log.append(f"Paso 2: Tras curación, {len(selected)} fuentes priorizadas.")
+
+        MAX_SCRAPE = 10
+        scraped_by_url: Dict[str, str] = {}
+        for i, src in enumerate(selected[:MAX_SCRAPE]):
+            self._log(f"🕸️ Scraping ({i + 1}/{min(len(selected), MAX_SCRAPE)}): {src.get('title', '')[:60]}...")
+            try:
+                scraped_by_url[src["url"]] = self.ingestor.scrape_url(src["url"])[:8000]
+            except Exception as ex:
+                scraped_by_url[src["url"]] = f"[scrape error: {ex}]"
+            time.sleep(0.2)
+
+        # --- Secciones por eje (solo fuentes que pasaron a selected) ---
+        axis_sections_md: List[str] = []
+        for axis_label, _ in axes:
+            lines = [f"### Eje `{axis_label}`\n"]
+            bucket = axis_buckets.get(axis_label, [])
+            seen = set()
+            any_row = False
+            for h in bucket:
+                u = h.get("url", "")
+                if u not in selected_urls or u in seen:
+                    continue
+                seen.add(u)
+                any_row = True
+                title = h.get("title", "Sin título")
+                summ = (h.get("summary") or "")[:400].replace("\n", " ")
+                lines.append(f"- [{title}]({u}) — _{summ}_")
+            if not any_row:
+                lines.append("_Ninguna fuente de este eje entró en el conjunto curado final._")
+            axis_sections_md.append("\n".join(lines))
+
+        # Contexto agregado para síntesis (resúmenes + snippets)
+        digest_parts: List[str] = []
+        for s in selected:
+            u = s["url"]
+            digest_parts.append(
+                f"### {s.get('title', '')}\nURL: {u}\nResumen búsqueda: {s.get('summary', '')}\n"
+                f"Snippet:\n{scraped_by_url.get(u, '')[:4000]}\n"
+            )
+        digest = "\n".join(digest_parts)
+
+        self._log("✍️ Síntesis cruzada (curador académico)...")
+        synthesis = self.agent_manager._run_agent_task(
+            "Curador académico / revisión sistemática",
+            "Integras evidencia de varias consultas académicas. Explicas qué relaciones entre "
+            "los conceptos aparecen en la literatura recuperada, qué tensiones o vacíos hay, y "
+            "qué líneas de lectura recomiendas. Cita con [título](URL). Sin inventar papers que "
+            "no estén en el digest.",
+            digest,
+            f"Conceptos: {combined_label}. Responde en el mismo idioma predominante de esos conceptos.",
+        )
+        log.append("Paso 3: Síntesis cruzada generada.")
+
+        biblio = "\n".join(
+            sorted(
+                {
+                    f"- [{s.get('title', 'Fuente')}]({s['url']})"
+                    for s in selected
+                    if s.get("url")
+                }
+            )
+        )
+
+        full_report = f"""# Exploración literaria por relaciones: {combined_label}
+
+## Resumen ejecutivo
+Fan-out académico en **{len(axes)}** ejes (singles, pares{" y tupla completa" if len(concepts) <= 4 else ""}), **{len(deduped)}** URLs únicas, **{len(selected)}** fuentes tras curación.
+
+## Hallazgos por eje de búsqueda
+
+{chr(10).join(axis_sections_md)}
+
+## Síntesis cruzada y vacíos
+
+{synthesis}
+
+## Bibliografía (fuentes curadas)
+
+{biblio}
+
+---
+*Generado por MI-AI — Blueprint de exploración literaria multi-concepto.*
+"""
+        log.append("--- FIN: EXPLORACIÓN LITERARIA ---")
+        return {"report": full_report, "transcript": "\n".join(log)}
 
     def run_batch_organize(self, vault_path: str) -> Dict[str, Any]:
         """

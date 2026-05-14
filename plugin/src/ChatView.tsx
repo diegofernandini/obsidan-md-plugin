@@ -136,6 +136,7 @@ const ChatComponent = ({ app, settings }: { app: any, settings: any }) => {
             agent: originalInput.startsWith('/organize') ? '🏗️ Arquitecto de Bóveda' 
                  : originalInput.startsWith('/roadmap ') ? '🗺️ Roadmap Blueprint' 
                  : originalInput.startsWith('/synergy ') ? '🔮 Sinergia Blueprint' 
+                 : originalInput.startsWith('/explore ') ? '📚 Exploración literaria' 
                  : currentAgent 
         };
         setMessages(prev => [...prev, assistantMsg]);
@@ -165,6 +166,11 @@ const ChatComponent = ({ app, settings }: { app: any, settings: any }) => {
                 const cleanInput = originalInput.replace('/synergy ', '').replace(/[\[\]]/g, '');
                 const topics = cleanInput.split(',').map(s => s.trim());
                 body = { topics, vault_path: app.vault.adapter.getBasePath() };
+            } else if (originalInput.startsWith('/explore ')) {
+                endpoint = `http://127.0.0.1:${settings.serverPort}/blueprint/explore`;
+                const cleanInput = originalInput.replace('/explore ', '').replace(/[\[\]]/g, '');
+                const topics = cleanInput.split(',').map(s => s.trim());
+                body = { topics, vault_path: app.vault.adapter.getBasePath() };
             } else if (originalInput === '/organize') {
                 endpoint = `http://127.0.0.1:${settings.serverPort}/blueprint/organize`;
                 // No message needed, vault_path is sent in the body already
@@ -175,6 +181,11 @@ const ChatComponent = ({ app, settings }: { app: any, settings: any }) => {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body)
             });
+
+            if (!response.ok) {
+                setMessages(prev => [...prev, { role: 'system', content: `Error: ${response.status} - ${response.statusText}` }]);
+                return;
+            }
 
             if (!response.body) return;
             let fullContent = '';
@@ -187,11 +198,21 @@ const ChatComponent = ({ app, settings }: { app: any, settings: any }) => {
             if (reader) {
                 while (true) {
                     const { done, value } = await reader.read();
-                    if (done) break;
 
-                    buffer += decoder.decode(value, { stream: true });
+                    // Flush remaining buffer when stream ends
+                    if (done) {
+                        buffer += decoder.decode();
+                        if (buffer.trim()) {
+                            buffer += '\n\n'; // force event flush
+                        }
+                    }
+
+                    if (!done) {
+                        buffer += decoder.decode(value, { stream: true });
+                    }
+
                     const lines = buffer.split('\n');
-                    buffer = lines.pop() || ''; // Keep fragment for next chunk
+                    buffer = done ? '' : (lines.pop() || ''); // Keep fragment for next chunk
 
                     for (let rawLine of lines) {
                         rawLine = rawLine.replace(/\r$/, '');
@@ -245,6 +266,8 @@ const ChatComponent = ({ app, settings }: { app: any, settings: any }) => {
                             }
                         }
                     }
+
+                    if (done) break;
                 }
             }
         } catch (err) {
@@ -624,7 +647,7 @@ const ChatComponent = ({ app, settings }: { app: any, settings: any }) => {
                         <option value="local">Modo Local (Vault)</option>
                         <option value="web">Modo Web (Scraper)</option>
                         <option value="hybrid">Modo Híbrido (Pro)</option>
-                        <option value="blueprint">Blueprints (Commands)</option>
+                        <option value="blueprint">Blueprints (/roadmap, /synergy, /explore, /organize)</option>
                     </select>
 
                     {currentMode === 'local' && (
@@ -713,15 +736,15 @@ const ChatComponent = ({ app, settings }: { app: any, settings: any }) => {
                             {currentMode === 'local' && currentAgent.includes('Visionario') && '💡'}
                             {currentMode === 'web' && '🌐'}
                             {currentMode === 'hybrid' && '🤝'}
-                            {currentMode === 'blueprint' && '🗺️'}
+                            {currentMode === 'blueprint' && '📚'}
                         </div>
                         <h4 style={{ margin: '0 0 10px 0', color: 'var(--text-normal)' }}>
                             {currentMode === 'local' ? 'Interrogatorio Local' :
                              currentMode === 'web' ? 'Investigación Autónoma' :
                              currentMode === 'hybrid' ? 'Análisis Híbrido 360' :
-                             'Ejecución Multi-Agente'}
+                             'Blueprints MI-AI'}
                         </h4>
-                        <p style={{ fontSize: '0.9em', maxWidth: '80%' }}>
+                        <p style={{ fontSize: '0.9em', maxWidth: '85%', lineHeight: 1.45 }}>
                             {currentMode === 'local' && currentAgent.includes('Detective') && "Extraeré datos y hechos precisos desde el contexto de tus notas locales sin interpretación."}
                             {currentMode === 'local' && currentAgent.includes('Editor') && "Tomaré tus notas y redactaré un nuevo resumen ejecutivo coherente y con narrativa."}
                             {currentMode === 'local' && currentAgent.includes('Crítico') && "Buscaré brechas de información técnica y contradicciones ocultas en tus recortes."}
@@ -729,7 +752,13 @@ const ChatComponent = ({ app, settings }: { app: any, settings: any }) => {
                             
                             {currentMode === 'web' && "Saldré a internet, buscaré fuentes, extraeré contexto de las mejores y simularé un debate interno para darte la respuesta más rica."}
                             {currentMode === 'hybrid' && "Revisaré tus notas locales y si detecto vacíos saldré a internet para comparar y complementar la información con datos externos."}
-                            {currentMode === 'blueprint' && "Orquestaré un escuadrón pre-programado. Comandos: '/roadmap [tema]', '/synergy [temas]', o '/organize [Ruta_Carpeta]'."}
+                            {currentMode === 'blueprint' && (
+                                <>
+                                    <strong>/explore</strong> lanza búsquedas académicas por <em>ejes</em> (cada concepto, cada par de conceptos y, si aplica, la combinación completa) en arXiv y web académica, fusiona resultados y genera un informe con síntesis cruzada.
+                                    <br /><br />
+                                    También: <code style={{ fontSize: '0.88em' }}>/roadmap [tema]</code>, <code style={{ fontSize: '0.88em' }}>/synergy [t1, t2, …]</code> (sinergias híbrido local+web), <code style={{ fontSize: '0.88em' }}>/organize</code> (vault incremental).
+                                </>
+                            )}
                         </p>
                     </div>
                 )}
@@ -809,12 +838,16 @@ const ChatComponent = ({ app, settings }: { app: any, settings: any }) => {
                     borderRadius: '4px',
                     color: 'var(--text-muted)'
                 }}>
-                    <strong>🔮 Blueprints:</strong>
-                    <ul style={{ margin: '4px 0', paddingLeft: '16px' }}>
-                        <li><code>/roadmap [tema]</code></li>
-                        <li><code>/synergy [tema1, tema2]</code></li>
-                        <li><code>/organize</code> — organiza todo el vault (incremental)</li>
+                    <strong>🔮 Blueprints</strong>
+                    <ul style={{ margin: '6px 0 8px 0', paddingLeft: '16px', lineHeight: 1.5 }}>
+                        <li><code>/explore [c1, c2, …]</code> — <strong>exploración literaria multi-concepto</strong> (2–5 términos separados por comas). Búsqueda por ejes académicos, informe y guardado en <code>MI-AI Reports</code>.</li>
+                        <li><code>/roadmap [tema]</code> — roadmap de investigación (local + web).</li>
+                        <li><code>/synergy [tema1, tema2]</code> — matriz de sinergias (vault + web por tema).</li>
+                        <li><code>/organize</code> — organiza el vault de forma incremental.</li>
                     </ul>
+                    <div style={{ fontSize: '0.92em', color: 'var(--text-normal)', opacity: 0.9 }}>
+                        Ejemplo: <code>/explore quantitative modeling, microstructures, finance</code>
+                    </div>
                 </div>
             )}
 
@@ -833,7 +866,9 @@ const ChatComponent = ({ app, settings }: { app: any, settings: any }) => {
                     value={input} 
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                    placeholder="..."
+                    placeholder={currentMode === 'blueprint'
+                        ? '/explore concepto1, concepto2, concepto3'
+                        : '...'}
                     style={{ 
                         flex: 1, 
                         background: 'transparent', 
