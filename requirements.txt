@@ -11,3 +11,11 @@ tiktoken
 sentence-transformers
 ollama
 docx2txt
+fastapi
+uvicorn
+sse-starlette
+pydantic
+office365-rest-python-client
+arxiv
+duckduckgo-search
+requests

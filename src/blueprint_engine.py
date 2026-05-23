@@ -10,7 +10,7 @@ class BlueprintEngine:
     """
     Orquesta flujos de trabajo multi-agente complejos (Blueprints).
     """
-    def __init__(self, model_name: str = "llama3.1", log_callback=None, agent_manager=None, ingestor=None):
+    def __init__(self, model_name: str = "llama3.2:1b", log_callback=None, agent_manager=None, ingestor=None):
         self.agent_manager = agent_manager or AgentManager(model_name=model_name)
         self.ingestor = ingestor or DataIngestor()
         self.log_callback = log_callback
@@ -441,6 +441,98 @@ Fan-out académico en **{len(axes)}** ejes (singles, pares{" y tupla completa" i
 *Generado por MI-AI — Blueprint de exploración literaria multi-concepto.*
 """
         log.append("--- FIN: EXPLORACIÓN LITERARIA ---")
+        return {"report": full_report, "transcript": "\n".join(log)}
+
+    def run_deep_ask(self, question: str, vault_path: str, target_path: str = None) -> Dict[str, Any]:
+        """
+        Blueprint: Deep Ask (Exploración profunda local).
+        Permite explorar todo el vault o una ruta/archivo específico usando multi-query.
+        """
+        self._log(f"\n🚀 Iniciando Blueprint: DEEP ASK para '{question}'")
+        log = []
+        log.append(f"--- INICIO DE BLUEPRINT: DEEP ASK ---")
+        log.append(f"Pregunta: {question}")
+        
+        search_path = vault_path
+        if target_path:
+            import os
+            # Limpiamos barras y construimos ruta
+            clean_target = target_path.strip().strip('/\\')
+            search_path = os.path.join(vault_path, clean_target)
+            self._log(f"🎯 Limitando la exploración a la ruta específica: {clean_target}")
+            log.append(f"Paso 0: Objetivo específico: {clean_target}")
+            if not os.path.exists(search_path):
+                msg = f"Error: La ruta especificada '{clean_target}' no existe en el vault."
+                self._log(f"❌ {msg}")
+                return {"report": f"# Error\n\n{msg}", "transcript": "\n".join(log)}
+
+        self._log("🧠 PASO 1: Descomponiendo la pregunta en sub-consultas (Multi-Query)...")
+        system_prompt = "Eres un experto en búsqueda de información. Tu objetivo es dividir la pregunta principal del usuario en 3 sub-consultas de búsqueda optimizadas para una base de datos vectorial local. Responde ÚNICAMENTE con las sub-consultas, separadas por saltos de línea."
+        task = f"Pregunta original: '{question}'. Genera 3 sub-consultas cortas en el mismo idioma para explorar este tema a fondo en las notas."
+        
+        queries_response = self.agent_manager._run_agent_task("Analista de Búsqueda", system_prompt, "", task)
+        sub_queries = [q.strip('- ').strip() for q in queries_response.split('\n') if q.strip()][:3]
+        
+        if question not in sub_queries:
+            sub_queries.insert(0, question)
+            
+        self._log(f"🔍 Sub-consultas generadas: {', '.join(sub_queries)}")
+        log.append(f"Paso 1: Sub-consultas generadas.")
+        
+        self._log("\n📂 PASO 2: Indexando y recuperando documentos del Vault...")
+        local_texts = self.ingestor.load_local_data(search_path)
+        if not local_texts:
+            msg = "No se encontraron documentos indexables en la ruta especificada."
+            self._log(f"⚠️ {msg}")
+            return {"report": f"# Deep Ask\n\n{msg}", "transcript": "\n".join(log)}
+            
+        self.ingestor.index_data(local_texts, "LOCAL", "deep_ask_index")
+        retriever = self.ingestor.get_retriever()
+        
+        retrieved_docs = {}
+        for q in sub_queries:
+            docs = retriever.invoke(q)
+            for d in docs:
+                source = d.metadata.get("source", "Nota")
+                content = d.page_content
+                if content not in retrieved_docs:
+                    retrieved_docs[content] = source
+                    
+        import os
+        context_blocks = []
+        for content, source in retrieved_docs.items():
+            basename = os.path.basename(str(source)).replace('.md', '')
+            context_blocks.append(f"--- ORIGEN: [[{basename}]] ---\n{content}")
+            
+        combined_context = "\n\n".join(context_blocks)
+        log.append(f"Paso 2: Recuperados {len(retrieved_docs)} fragmentos relevantes de {len(local_texts)} documentos.")
+        self._log(f"📑 {len(retrieved_docs)} fragmentos recuperados para análisis.")
+        
+        self._log("\n✍️ PASO 3: Analizando y sintetizando la respuesta profunda...")
+        synthesis_prompt = """Eres un Investigador Profundo (Deep Ask). Tu objetivo es responder exhaustivamente a la pregunta del usuario utilizando ÚNICAMENTE el contexto local proporcionado.
+REGLAS:
+1. Sé estructurado, profesional y analítico.
+2. Cita SIEMPRE la información referenciando las notas de origen usando la sintaxis de wikilinks (ej: [[NombreDeNota]]).
+3. Si el contexto local no contiene la respuesta, admítelo claramente, no inventes.
+4. Redacta una respuesta completa tipo reporte o artículo."""
+        
+        synthesis_task = f"Utiliza el siguiente contexto del Vault para responder a la pregunta profunda: '{question}'.\n\nCONTEXTO RECUPERADO:\n{combined_context}"
+        
+        report = self.agent_manager._run_agent_task("Investigador Profundo", synthesis_prompt, "", synthesis_task)
+        
+        log_sintesis = report[:150].replace('\n', ' ') + "..."
+        log.append(f"Paso 3: Análisis completado.")
+        
+        full_report = f"""# 🧠 Deep Ask: {question}
+
+{report}
+
+---
+*Generado por MI-AI — Blueprint Deep Ask (Solo Vault Local).*
+*Ruta explorada: `{target_path if target_path else '/'}`*
+"""
+        self._log("✅ Blueprint Deep Ask completado con éxito.")
+        log.append("--- FIN DE BLUEPRINT DEEP ASK ---")
         return {"report": full_report, "transcript": "\n".join(log)}
 
     def run_batch_organize(self, vault_path: str) -> Dict[str, Any]:

@@ -137,6 +137,7 @@ const ChatComponent = ({ app, settings }: { app: any, settings: any }) => {
                  : originalInput.startsWith('/roadmap ') ? '🗺️ Roadmap Blueprint' 
                  : originalInput.startsWith('/synergy ') ? '🔮 Sinergia Blueprint' 
                  : originalInput.startsWith('/explore ') ? '📚 Exploración literaria' 
+                 : originalInput.startsWith('/ask ') ? '🧠 Deep Ask' 
                  : currentAgent 
         };
         setMessages(prev => [...prev, assistantMsg]);
@@ -171,6 +172,23 @@ const ChatComponent = ({ app, settings }: { app: any, settings: any }) => {
                 const cleanInput = originalInput.replace('/explore ', '').replace(/[\[\]]/g, '');
                 const topics = cleanInput.split(',').map(s => s.trim());
                 body = { topics, vault_path: app.vault.adapter.getBasePath() };
+            } else if (originalInput.startsWith('/ask ')) {
+                endpoint = `http://127.0.0.1:${settings.serverPort}/blueprint/ask`;
+                
+                let cleanInput = originalInput.replace('/ask ', '').trim();
+                let targetPath = null;
+                // Parse optional target: /ask [folder/file] question
+                const match = cleanInput.match(/^\[(.*?)\]\s*(.*)/);
+                if (match) {
+                    targetPath = match[1];
+                    cleanInput = match[2];
+                }
+                
+                body = { 
+                    message: cleanInput, 
+                    vault_path: app.vault.adapter.getBasePath(),
+                    target_path: targetPath
+                };
             } else if (originalInput === '/organize') {
                 endpoint = `http://127.0.0.1:${settings.serverPort}/blueprint/organize`;
                 // No message needed, vault_path is sent in the body already
@@ -647,7 +665,7 @@ const ChatComponent = ({ app, settings }: { app: any, settings: any }) => {
                         <option value="local">Modo Local (Vault)</option>
                         <option value="web">Modo Web (Scraper)</option>
                         <option value="hybrid">Modo Híbrido (Pro)</option>
-                        <option value="blueprint">Blueprints (/roadmap, /synergy, /explore, /organize)</option>
+                        <option value="blueprint">Blueprints (/ask, /roadmap, /synergy, /explore, /organize)</option>
                     </select>
 
                     {currentMode === 'local' && (
@@ -754,6 +772,8 @@ const ChatComponent = ({ app, settings }: { app: any, settings: any }) => {
                             {currentMode === 'hybrid' && "Revisaré tus notas locales y si detecto vacíos saldré a internet para comparar y complementar la información con datos externos."}
                             {currentMode === 'blueprint' && (
                                 <>
+                                    <strong>/ask [ruta opcional] pregunta</strong> explora a profundidad el vault o una carpeta específica (ej: <code>/ask [Proyectos] ¿estado?</code>).
+                                    <br /><br />
                                     <strong>/explore</strong> lanza búsquedas académicas por <em>ejes</em> (cada concepto, cada par de conceptos y, si aplica, la combinación completa) en arXiv y web académica, fusiona resultados y genera un informe con síntesis cruzada.
                                     <br /><br />
                                     También: <code style={{ fontSize: '0.88em' }}>/roadmap [tema]</code>, <code style={{ fontSize: '0.88em' }}>/synergy [t1, t2, …]</code> (sinergias híbrido local+web), <code style={{ fontSize: '0.88em' }}>/organize</code> (vault incremental).

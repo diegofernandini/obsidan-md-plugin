@@ -1,4 +1,4 @@
-from langchain_community.chat_models import ChatOllama
+from langchain_ollama import ChatOllama
 from typing import List, Dict, Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -7,7 +7,7 @@ class AgentManager:
     Orquesta los roles de los agentes (Extractor, Sintetizador) y el patrón de debate,
     utilizando un modelo local de Ollama.
     """
-    def __init__(self, model_name: str = "llama2"):
+    def __init__(self, model_name: str = "llama3.2:1b"):
         # Cambiamos ChatOpenAI por ChatOllama para usar modelos locales.
         # Asegúrate de tener el modelo especificado (ej: llama2, mistral) ejecutándose en Ollama.
         print(f"Inicializando el motor de IA con Ollama usando el modelo: {model_name}")

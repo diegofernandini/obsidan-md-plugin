@@ -21841,7 +21841,7 @@ var ChatComponent = ({ app, settings }) => {
     const assistantMsg = {
       role: "assistant",
       content: "",
-      agent: originalInput.startsWith("/organize") ? "\u{1F3D7}\uFE0F Arquitecto de B\xF3veda" : originalInput.startsWith("/roadmap ") ? "\u{1F5FA}\uFE0F Roadmap Blueprint" : originalInput.startsWith("/synergy ") ? "\u{1F52E} Sinergia Blueprint" : originalInput.startsWith("/explore ") ? "\u{1F4DA} Exploraci\xF3n literaria" : currentAgent
+      agent: originalInput.startsWith("/organize") ? "\u{1F3D7}\uFE0F Arquitecto de B\xF3veda" : originalInput.startsWith("/roadmap ") ? "\u{1F5FA}\uFE0F Roadmap Blueprint" : originalInput.startsWith("/synergy ") ? "\u{1F52E} Sinergia Blueprint" : originalInput.startsWith("/explore ") ? "\u{1F4DA} Exploraci\xF3n literaria" : originalInput.startsWith("/ask ") ? "\u{1F9E0} Deep Ask" : currentAgent
     };
     setMessages((prev) => [...prev, assistantMsg]);
     try {
@@ -21871,6 +21871,20 @@ var ChatComponent = ({ app, settings }) => {
         const cleanInput = originalInput.replace("/explore ", "").replace(/[\[\]]/g, "");
         const topics = cleanInput.split(",").map((s) => s.trim());
         body = { topics, vault_path: app.vault.adapter.getBasePath() };
+      } else if (originalInput.startsWith("/ask ")) {
+        endpoint = `http://127.0.0.1:${settings.serverPort}/blueprint/ask`;
+        let cleanInput = originalInput.replace("/ask ", "").trim();
+        let targetPath = null;
+        const match = cleanInput.match(/^\[(.*?)\]\s*(.*)/);
+        if (match) {
+          targetPath = match[1];
+          cleanInput = match[2];
+        }
+        body = {
+          message: cleanInput,
+          vault_path: app.vault.adapter.getBasePath(),
+          target_path: targetPath
+        };
       } else if (originalInput === "/organize") {
         endpoint = `http://127.0.0.1:${settings.serverPort}/blueprint/organize`;
       }
@@ -22314,7 +22328,7 @@ var ChatComponent = ({ app, settings }) => {
                 /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "local", children: "Modo Local (Vault)" }),
                 /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "web", children: "Modo Web (Scraper)" }),
                 /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "hybrid", children: "Modo H\xEDbrido (Pro)" }),
-                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "blueprint", children: "Blueprints (/roadmap, /synergy, /explore, /organize)" })
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "blueprint", children: "Blueprints (/ask, /roadmap, /synergy, /explore, /organize)" })
               ]
             }
           ),
@@ -22414,6 +22428,12 @@ var ChatComponent = ({ app, settings }) => {
                 currentMode === "web" && "Saldr\xE9 a internet, buscar\xE9 fuentes, extraer\xE9 contexto de las mejores y simular\xE9 un debate interno para darte la respuesta m\xE1s rica.",
                 currentMode === "hybrid" && "Revisar\xE9 tus notas locales y si detecto vac\xEDos saldr\xE9 a internet para comparar y complementar la informaci\xF3n con datos externos.",
                 currentMode === "blueprint" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "/ask [ruta opcional] pregunta" }),
+                  " explora a profundidad el vault o una carpeta espec\xEDfica (ej: ",
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "/ask [Proyectos] \xBFestado?" }),
+                  ").",
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("br", {}),
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("br", {}),
                   /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "/explore" }),
                   " lanza b\xFAsquedas acad\xE9micas por ",
                   /* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "ejes" }),

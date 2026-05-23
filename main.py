@@ -14,7 +14,7 @@ load_dotenv()
 PDF_DOCUMENT_PATH = "sample_banca_reporte.pdf" 
 DATA_SOURCES_DIR = "data_sources"
 INDEX_DIR = "faiss_index"
-MODEL_NAME = "llama3.1" # 🌟 Actualizado a un modelo que tienes instalado (llama3.1)
+MODEL_NAME = "llama3.2:1b" # 🌟 Actualizado a un modelo que tienes instalado (llama3.2:1b)
 REPORTS_DIR = "reports"
 
 def save_report(content: str, metadata: str, mode: str, topic: str = "analysis") -> str:

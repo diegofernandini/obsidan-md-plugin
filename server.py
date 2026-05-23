@@ -1,4 +1,7 @@
 import os
+import sys
+if sys.stdout.encoding.lower() != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8')
 import json
 import asyncio
 from typing import List, Optional
@@ -23,8 +26,8 @@ app.add_middleware(
 )
 
 # Inicialización de componentes
-# Se usa llama3.1 por defecto como en el PoC
-MODEL_NAME = "llama3.1"
+# Se usa llama3.2:1b por defecto como en el PoC
+MODEL_NAME = "llama3.2:1b"
 ingestor = DataIngestor()
 agent_manager = AgentManager(model_name=MODEL_NAME)
 
@@ -451,6 +454,80 @@ async def blueprint_explore(request: Request):
             yield {"data": f"LOG: ❌ Error crítico (Ver log): {str(e)}"}
             yield {
                 "data": f"RESULT: Lo siento, ocurrió un error en la exploración literaria. Detalles: {str(e)}"
+            }
+
+    return EventSourceResponse(event_generator())
+
+@app.post("/blueprint/ask")
+async def blueprint_ask(request: Request):
+    data = await request.json()
+    message = data.get("message", "")
+    vault_path = data.get("vault_path")
+    target_path = data.get("target_path")
+
+    async def event_generator():
+        queue = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        def log_to_queue(msg):
+            loop.call_soon_threadsafe(queue.put_nowait, msg)
+
+        yield {"data": "LOG: 🧠 Motor MI-AI Sincronizado. Iniciando Deep Ask..."}
+        await asyncio.sleep(0)
+
+        try:
+            engine = BlueprintEngine(
+                model_name=MODEL_NAME,
+                log_callback=log_to_queue,
+                agent_manager=agent_manager,
+                ingestor=ingestor,
+            )
+
+            executor_task = loop.run_in_executor(
+                None, engine.run_deep_ask, message, vault_path, target_path
+            )
+
+            last_heartbeat = loop.time()
+            disconnected = False
+            while True:
+                while not queue.empty():
+                    msg = queue.get_nowait()
+                    yield {"data": f"LOG: {msg}"}
+                    last_heartbeat = loop.time()
+
+                if executor_task.done():
+                    break
+
+                try:
+                    msg = await asyncio.wait_for(queue.get(), timeout=1.0)
+                    yield {"data": f"LOG: {msg}"}
+                    last_heartbeat = loop.time()
+                except asyncio.TimeoutError:
+                    if loop.time() - last_heartbeat > 10:
+                        yield {"comment": "ping"}
+                        last_heartbeat = loop.time()
+
+                    if await request.is_disconnected():
+                        logging.warning("Cliente desconectado durante Deep Ask.")
+                        executor_task.cancel()
+                        disconnected = True
+                        break
+            if disconnected:
+                return
+            result = await executor_task
+            yield {"data": f"RESULT: {result['report']}"}
+            yield {"data": f"TRANSCRIPT: {result['transcript']}"}
+            slug = str(message).replace(" ", "_")[:20] or "query"
+            await save_to_vault(vault_path, f"DEEP_ASK_{slug}", result["report"])
+        except BrokenPipeError:
+            logging.warning("Broken pipe: cliente desconectado durante Deep Ask.")
+            return
+        except Exception as e:
+            error_trace = traceback.format_exc()
+            logging.error(f"ERROR EN DEEP ASK: {str(e)}\n{error_trace}")
+            yield {"data": f"LOG: ❌ Error crítico (Ver log): {str(e)}"}
+            yield {
+                "data": f"RESULT: Lo siento, ocurrió un error en la exploración profunda. Detalles: {str(e)}"
             }
 
     return EventSourceResponse(event_generator())
