@@ -1,4 +1,4 @@
-# 🧠 Knowledge System PoC: MI-AI (Inteligencia de Mercado Artificial)
+# 🧠 MI-AI (Inteligencia de Mercado Artificial)
 
 ## 🎯 La Propuesta de Valor: Su Segundo Cerebro Corporativo
 
