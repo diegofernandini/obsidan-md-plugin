@@ -1,12 +1,11 @@
 # 🧠 MI-AI (Inteligencia de Mercado Artificial)
 
-## 🎯 La Propuesta de Valor: Su Segundo Cerebro Corporativo
+## 🎯 La Propuesta de Valor: Investigador privado 
 
 El MI-AI transforma la complejidad de la investigación (múltiples fuentes, múltiples disciplinas) en **Informes Ejecutivos estructurados y listos para la toma de decisiones.**
 
 Nuestro objetivo principal es resolver el principal cuello de botella de la consultoría moderna: **la dispersión y el tiempo dedicado a sintetizar la información.**
 
-**Diferenciador Clave:** El MI-AI no solo responde; demuestra **CÓMO** se llegó a la respuesta, forzando un diálogo visible entre especialistas virtuales. Esto genera confianza y permite la auditoría intelectual del análisis.
 
 ---
 
