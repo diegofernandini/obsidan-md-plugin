@@ -42,6 +42,13 @@ El *backend* sigue soportando múltiples fuentes de información:
 
 ---
 
+## 🔌 MCP Server (for other agents)
+
+Other agents (Cursor, Claude Desktop, etc.) can call MI-AI pipelines over the Model Context Protocol.
+
+- Entrypoint: `mcp_server.py` (stdio)
+- Setup, tools, and Cursor `mcp.json` example: see [MCP.md](MCP.md)
+
 ## 🚀 Roadmap de Desarrollo (Rumbo al Producto Completo)
 
 *   **FASE 1 (Completado):** Analista de Texto Avanzado (PDF/Documentos).

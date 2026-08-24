@@ -153,30 +153,42 @@ class AgentManager:
 
     # --- PATRÓN 2: ANÁLISIS DE CONTRASTE (WEB SCRAPING) ---
 
-    def conduct_contrast_analysis(self, content_optimista: str, content_escetico: str, task_context: str) -> str:
+    def conduct_contrast_analysis(self, content_optimista: str, content_escetico: str, task_context: str) -> Dict[str, str]:
         """
         Orquesta el patrón de debate entre dos contenidos con sesgos opuestos o complementarios.
+        Retorna un diccionario con 'report' y 'transcript'.
         """
+        
+        transcript_log = []
         
         # 1. Analista Optimista (El 'Pros')
         role_optimista = "Consultor Estratégico Optimista"
         system_prompt_optimista = "Tu perspectiva es inherentemente positiva y proactiva. Tu objetivo es destacar las oportunidades, los potenciales de crecimiento, las sinergias y las razones por las que el proyecto o tema en cuestión es viable. Articula tu análisis con un tono entusiasta y visionario."
         
-        print("\n" + "="*20 + " -> INICIO DE DEBATE: PERSPECTIVA A " + "="*20)
+        msg_perspectiva_a = "INICIO DE DEBATE: PERSPECTIVA A (Optimista)"
+        print("\n" + "="*20 + f" -> {msg_perspectiva_a} " + "="*20)
+        transcript_log.append(f"\n--- {msg_perspectiva_a} ---")
         response_optimista = self._run_agent_task(
             role_optimista, system_prompt_optimista, content_optimista, f"Analiza los puntos fuertes y oportunidades de este contenido respecto a: {task_context}")
+        transcript_log.append(response_optimista[:500] + "..." if len(response_optimista) > 500 else response_optimista)
 
         # 2. Abogado del Diablo (El 'Contras')
         role_escetico = "Analista de Riesgos / Abogado del Diablo"
         system_prompt_escetico = "Tu perspectiva es inherentemente cautelosa y crítica. Tu objetivo es encontrar riesgos, debilidades, presuposiciones no verificadas y contradicciones. Nunca aceptes una premisa sin cuestionarla. Articula tu análisis con un tono sobrio, de advertencia y precaución."
         
-        print("\n" + "="*20 + " -> INICIO DE DEBATE: PERSPECTIVA B " + "="*20)
+        msg_perspectiva_b = "INICIO DE DEBATE: PERSPECTIVA B (Crítica)"
+        print("\n" + "="*20 + f" -> {msg_perspectiva_b} " + "="*20)
+        transcript_log.append(f"\n--- {msg_perspectiva_b} ---")
         response_escetico = self._run_agent_task(
             role_escetico, system_prompt_escetico, content_escetico, f"Identifica riesgos significativos y debilidades estructurales en este contenido respecto a: {task_context}")
+        transcript_log.append(response_escetico[:500] + "..." if len(response_escetico) > 500 else response_escetico)
 
         # 3. Síntesis Final (Mediador)
         role_mediador = "Director de Análisis Senior"
         system_prompt_mediador = f"Tu tarea es sintetizar el debate. Debes crear una Matriz de Decisión de Riesgos/Oportunidades. Cita tus fuentes usando la sintaxis de Obsidian dentro del cuerpo del texto. IMPORTANTE: El informe final DEBE estar redactado íntegramente en el idioma del tema solicitado ('{task_context}'). NO crees una sección de Bibliografía al final."
+        
+        msg_sintesis = "SÍNTESIS FINAL (Mediador)"
+        transcript_log.append(f"\n--- {msg_sintesis} ---")
         
         task_mediador = f"""
         Basándote en los siguientes análisis de debate, redacta un informe final de "Matriz de Decisión" sobre: {task_context}.
@@ -189,7 +201,12 @@ class AgentManager:
         """
         
         report = self._run_agent_task(role_mediador, system_prompt_mediador, "", task_mediador)
-        return report
+        transcript_log.append(report[:500] + "..." if len(report) > 500 else report)
+        
+        return {
+            "report": report,
+            "transcript": "\n".join(transcript_log)
+        }
 
     # --- PATRÓN 3: ANÁLISIS HÍBRIDO (LOCAL + WEB) ---
 

@@ -4,6 +4,7 @@ if sys.stdout.encoding.lower() != 'utf-8':
     sys.stdout.reconfigure(encoding='utf-8')
 import json
 import asyncio
+import time
 from typing import List, Optional
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,8 +32,8 @@ MODEL_NAME = "llama3.2:1b"
 ingestor = DataIngestor()
 agent_manager = AgentManager(model_name=MODEL_NAME)
 
-async def save_to_vault(vault_path: str, title: str, content: str):
-    """Guarda un reporte en el vault de Obsidian."""
+async def save_to_vault(vault_path: str, title: str, content: str, transcript: Optional[str] = None):
+    """Guarda un reporte en el vault de Obsidian. Si se proporciona transcript, lo incrusta al final."""
     if not vault_path: return
     
     reports_dir = os.path.join(vault_path, "MI-AI Reports")
@@ -42,20 +43,87 @@ async def save_to_vault(vault_path: str, title: str, content: str):
     filename = f"{title}_{asyncio.get_event_loop().time()}.md".replace(" ", "_")
     file_path = os.path.join(reports_dir, filename)
     
+    # Agregar transcript al final si se proporciona
+    full_content = content
+    if transcript:
+        full_content += f"\n\n---\n\n## 📋 TRANSCRIPT DE PROCESAMIENTO\n\n```\n{transcript}\n```"
+    
     with open(file_path, "w", encoding="utf-8") as f:
-        f.write(content)
+        f.write(full_content)
     print(f"Reporte guardado en: {file_path}")
 
 import logging
 import traceback
+from logging.handlers import RotatingFileHandler
+import glob
 
-# Configurar log de emergencia
-logging.basicConfig(
+# Configurar log con rotación automática
+# Rota cuando alcanza 10 MB, mantiene los últimos 5 archivos
+log_handler = RotatingFileHandler(
     filename="MIAI_DEBUG.log",
-    level=logging.DEBUG,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    maxBytes=10 * 1024 * 1024,  # 10 MB
+    backupCount=5  # Mantener 5 archivos antiguos
 )
+log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+log_handler.setFormatter(log_formatter)
+
+logger = logging.getLogger()
+logger.setLevel(logging.DEBUG)
+logger.addHandler(log_handler)
+
 logging.info("--- SERVIDOR MI-AI INICIADO ---")
+
+def cleanup_old_transcripts(days: int = 30) -> None:
+    """
+    Limpia archivos de transcript más antiguos que N días.
+    IMPORTANTE: Solo limpia transcripts sueltos (que NO están incrustados en notas del vault).
+    Se ejecuta al iniciar el servidor.
+    """
+    import time as time_module
+    current_time = time_module.time()
+    max_age_seconds = days * 24 * 60 * 60
+    
+    os.makedirs("reports", exist_ok=True)
+    transcript_files = glob.glob("reports/transcript_*.log")
+    
+    deleted_count = 0
+    for filepath in transcript_files:
+        try:
+            file_age = current_time - os.path.getmtime(filepath)
+            if file_age > max_age_seconds:
+                os.remove(filepath)
+                deleted_count += 1
+                logging.info(f"Archivo transcript eliminado (antigüedad > {days} días): {filepath}")
+        except Exception as e:
+            logging.warning(f"Error al limpiar transcript {filepath}: {e}")
+    
+    if deleted_count > 0:
+        logging.info(f"Limpieza de transcripts: {deleted_count} archivos eliminados (solo sueltos, no incrustados en notas)")
+
+# Ejecutar limpieza al iniciar
+cleanup_old_transcripts(days=30)
+
+def save_transcript_log(transcript: str, topic: str) -> str:
+    """
+    Guarda el transcript en un archivo .log en la carpeta reports/
+    Retorna el path relativo del archivo para crear un vínculo.
+    """
+    os.makedirs("reports", exist_ok=True)
+    timestamp = int(time.time())
+    
+    # Sanitizar nombre del archivo
+    safe_topic = "".join(c if c.isalnum() or c in ('-', '_') else '_' for c in topic)[:50]
+    transcript_filename = f"transcript_{safe_topic}_{timestamp}.log"
+    transcript_path = os.path.join("reports", transcript_filename)
+    
+    with open(transcript_path, "w", encoding="utf-8") as f:
+        f.write(f"=== TRANSCRIPT ===\n")
+        f.write(f"Tema: {topic}\n")
+        f.write(f"Timestamp: {timestamp}\n")
+        f.write(f"{'='*50}\n\n")
+        f.write(transcript)
+    
+    return transcript_path
 
 class ChatRequest(BaseModel):
     message: str
@@ -198,13 +266,30 @@ async def chat(chat_request: ChatRequest, request: Request):
                     research_contents.append(content)
 
                 yield {"data": "LOG: Iniciando debate de contraste..." if len(research_contents) >= 2 else "LOG: Sintetizando hallazgos..."}
+                transcript_link = ""
                 if len(research_contents) >= 2:
-                    report = await loop.run_in_executor(None, agent_manager.conduct_contrast_analysis, research_contents[0], research_contents[1], chat_request.message)
+                    debate_result = await loop.run_in_executor(None, agent_manager.conduct_contrast_analysis, research_contents[0], research_contents[1], chat_request.message)
+                    report = debate_result["report"]
+                    transcript = debate_result["transcript"]
+                    
+                    # Guardar transcript en archivo
+                    timestamp = time.time()
+                    transcript_filename = f"debate_transcript_{int(timestamp)}.log"
+                    transcript_path = os.path.join("reports", transcript_filename)
+                    
+                    os.makedirs("reports", exist_ok=True)
+                    with open(transcript_path, "w", encoding="utf-8") as f:
+                        f.write(f"=== TRANSCRIPT DEL DEBATE ===\n")
+                        f.write(f"Tema: {chat_request.message}\n")
+                        f.write(f"Fecha: {timestamp}\n\n")
+                        f.write(transcript)
+                    
+                    transcript_link = f"\n\n### [📋 TRANSCRIPT del Debate]({transcript_path})"
                 else:
                     report = await loop.run_in_executor(None, agent_manager.synthesize_report, research_contents[0], chat_request.message)
 
                 bibliography = "\n\n## Bibliografía\n" + "\n".join([f"- [{s.get('title', 'Fuente Web')}]({s['url']})" for s in selected_sources])
-                yield {"data": f"RESULT: {report}{bibliography}"}
+                yield {"data": f"RESULT: {report}{transcript_link}{bibliography}"}
 
             # 3. MODO HÍBRIDO (Vault + Web)
             elif chat_request.mode == "hybrid":
@@ -306,9 +391,10 @@ async def blueprint_roadmap(request: ChatRequest, fastapi_request: Request):
             if disconnected:
                 return
             result = await executor_task
-            yield {"data": f"RESULT: {result['report']}"}
-            yield {"data": f"TRANSCRIPT: {result['transcript']}"}
-            await save_to_vault(request.vault_path, f"ROADMAP_{request.message[:20]}", result['report'])
+            transcript_path = save_transcript_log(result['transcript'], f"roadmap_{request.message[:30]}")
+            transcript_link = f"\n\n### [📋 TRANSCRIPT del Roadmap]({transcript_path})"
+            yield {"data": f"RESULT: {result['report']}{transcript_link}"}
+            await save_to_vault(request.vault_path, f"ROADMAP_{request.message[:20]}", result['report'], result['transcript'])
         except BrokenPipeError:
             logging.warning("Broken pipe: cliente desconectado durante Roadmap.")
             return
@@ -371,11 +457,19 @@ async def blueprint_synergy(request: Request):
             if disconnected:
                 return
             result = await executor_task
-            yield {"data": f"RESULT: {result['report']}"}
+            combined_topics = " + ".join(topics) if topics else "synergy"
+            transcript_path = save_transcript_log(result['transcript'], f"synergy_{combined_topics[:30]}")
+            transcript_link = f"\n\n### [📋 TRANSCRIPT de la Sinergia]({transcript_path})"
+            yield {"data": f"RESULT: {result['report']}{transcript_link}"}
         except BrokenPipeError:
             logging.warning("Broken pipe: cliente desconectado durante Sinergia.")
             return
         except Exception as e:
+            # Tratamiento especial para pipe roto: el cliente ya se desconectó.
+            if isinstance(e, BrokenPipeError) or (isinstance(e, OSError) and getattr(e, 'errno', None) == 32):
+                logging.warning("Broken pipe: cliente desconectado durante Sinergia (capturado en excepción genérica).")
+                return
+
             error_trace = traceback.format_exc()
             logging.error(f"ERROR EN SINERGIA: {str(e)}\n{error_trace}")
             yield {"data": f"LOG: ❌ Error crítico (Ver log): {str(e)}"}
@@ -439,12 +533,14 @@ async def blueprint_explore(request: Request):
             if disconnected:
                 return
             result = await executor_task
-            yield {"data": f"RESULT: {result['report']}"}
-            yield {"data": f"TRANSCRIPT: {result['transcript']}"}
+            combined_topics = " + ".join(topics) if topics else "explore"
+            transcript_path = save_transcript_log(result['transcript'], f"explore_{combined_topics[:30]}")
+            transcript_link = f"\n\n### [📋 TRANSCRIPT de la Exploración]({transcript_path})"
+            yield {"data": f"RESULT: {result['report']}{transcript_link}"}
             slug = "_".join(
                 (str(t) or "").replace(" ", "_")[:14] for t in (topics or [])[:3]
             )[:48] or "concepts"
-            await save_to_vault(vault_path, f"EXPLORE_{slug}", result["report"])
+            await save_to_vault(vault_path, f"EXPLORE_{slug}", result["report"], result["transcript"])
         except BrokenPipeError:
             logging.warning("Broken pipe: cliente desconectado durante Explore.")
             return
@@ -570,7 +666,9 @@ async def blueprint_organize(request: ChatRequest, fastapi_request: Request):
             if disconnected:
                 return
             result = await executor_task
-            yield {"data": f"RESULT: {result['report']}"}
+            transcript_path = save_transcript_log(result['transcript'], "organize_vault")
+            transcript_link = f"\n\n### [📋 TRANSCRIPT de la Organización]({transcript_path})"
+            yield {"data": f"RESULT: {result['report']}{transcript_link}"}
         except BrokenPipeError:
             logging.warning("Broken pipe: cliente desconectado durante Organize.")
             return

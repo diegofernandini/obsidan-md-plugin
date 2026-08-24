@@ -216,21 +216,11 @@ const ChatComponent = ({ app, settings }: { app: any, settings: any }) => {
             if (reader) {
                 while (true) {
                     const { done, value } = await reader.read();
+                    if (done) break;
 
-                    // Flush remaining buffer when stream ends
-                    if (done) {
-                        buffer += decoder.decode();
-                        if (buffer.trim()) {
-                            buffer += '\n\n'; // force event flush
-                        }
-                    }
-
-                    if (!done) {
-                        buffer += decoder.decode(value, { stream: true });
-                    }
-
+                    buffer += decoder.decode(value, { stream: true });
                     const lines = buffer.split('\n');
-                    buffer = done ? '' : (lines.pop() || ''); // Keep fragment for next chunk
+                    buffer = lines.pop() || ''; // Keep fragment for next chunk
 
                     for (let rawLine of lines) {
                         rawLine = rawLine.replace(/\r$/, '');
@@ -284,8 +274,6 @@ const ChatComponent = ({ app, settings }: { app: any, settings: any }) => {
                             }
                         }
                     }
-
-                    if (done) break;
                 }
             }
         } catch (err) {
@@ -754,15 +742,15 @@ const ChatComponent = ({ app, settings }: { app: any, settings: any }) => {
                             {currentMode === 'local' && currentAgent.includes('Visionario') && '💡'}
                             {currentMode === 'web' && '🌐'}
                             {currentMode === 'hybrid' && '🤝'}
-                            {currentMode === 'blueprint' && '📚'}
+                            {currentMode === 'blueprint' && '🗺️'}
                         </div>
                         <h4 style={{ margin: '0 0 10px 0', color: 'var(--text-normal)' }}>
                             {currentMode === 'local' ? 'Interrogatorio Local' :
                              currentMode === 'web' ? 'Investigación Autónoma' :
                              currentMode === 'hybrid' ? 'Análisis Híbrido 360' :
-                             'Blueprints MI-AI'}
+                             'Ejecución Multi-Agente'}
                         </h4>
-                        <p style={{ fontSize: '0.9em', maxWidth: '85%', lineHeight: 1.45 }}>
+                        <p style={{ fontSize: '0.9em', maxWidth: '80%' }}>
                             {currentMode === 'local' && currentAgent.includes('Detective') && "Extraeré datos y hechos precisos desde el contexto de tus notas locales sin interpretación."}
                             {currentMode === 'local' && currentAgent.includes('Editor') && "Tomaré tus notas y redactaré un nuevo resumen ejecutivo coherente y con narrativa."}
                             {currentMode === 'local' && currentAgent.includes('Crítico') && "Buscaré brechas de información técnica y contradicciones ocultas en tus recortes."}
@@ -858,16 +846,12 @@ const ChatComponent = ({ app, settings }: { app: any, settings: any }) => {
                     borderRadius: '4px',
                     color: 'var(--text-muted)'
                 }}>
-                    <strong>🔮 Blueprints</strong>
-                    <ul style={{ margin: '6px 0 8px 0', paddingLeft: '16px', lineHeight: 1.5 }}>
-                        <li><code>/explore [c1, c2, …]</code> — <strong>exploración literaria multi-concepto</strong> (2–5 términos separados por comas). Búsqueda por ejes académicos, informe y guardado en <code>MI-AI Reports</code>.</li>
-                        <li><code>/roadmap [tema]</code> — roadmap de investigación (local + web).</li>
-                        <li><code>/synergy [tema1, tema2]</code> — matriz de sinergias (vault + web por tema).</li>
-                        <li><code>/organize</code> — organiza el vault de forma incremental.</li>
+                    <strong>🔮 Blueprints:</strong>
+                    <ul style={{ margin: '4px 0', paddingLeft: '16px' }}>
+                        <li><code>/roadmap [tema]</code></li>
+                        <li><code>/synergy [tema1, tema2]</code></li>
+                        <li><code>/organize</code> — organiza todo el vault (incremental)</li>
                     </ul>
-                    <div style={{ fontSize: '0.92em', color: 'var(--text-normal)', opacity: 0.9 }}>
-                        Ejemplo: <code>/explore quantitative modeling, microstructures, finance</code>
-                    </div>
                 </div>
             )}
 
@@ -886,9 +870,7 @@ const ChatComponent = ({ app, settings }: { app: any, settings: any }) => {
                     value={input} 
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                    placeholder={currentMode === 'blueprint'
-                        ? '/explore concepto1, concepto2, concepto3'
-                        : '...'}
+                    placeholder="..."
                     style={{ 
                         flex: 1, 
                         background: 'transparent', 

@@ -11,6 +11,7 @@ tiktoken
 sentence-transformers
 ollama
 docx2txt
+# FastAPI brain server (server.py)
 fastapi
 uvicorn
 sse-starlette
@@ -19,3 +20,7 @@ office365-rest-python-client
 arxiv
 duckduckgo-search
 requests
+# MCP server (mcp_server.py) — stdio tools for Cursor / other agents
+# Pin <2: FastMCP lives in mcp.server.fastmcp on the 1.x line
+mcp[cli]<2
+
