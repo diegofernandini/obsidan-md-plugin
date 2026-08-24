@@ -1,11 +1,11 @@
-import { ItemView, WorkspaceLeaf, TFile, MarkdownRenderer } from 'obsidian';
+import { ItemView, WorkspaceLeaf, TFile, MarkdownRenderer, FileSystemAdapter } from 'obsidian';
 import * as React from 'react';
 import * as ReactDOM from 'react-dom/client';
 
 export const VIEW_TYPE_CHAT = "mi-ai-chat-view";
 
 interface Message {
-    role: 'user' | 'assistant';
+    role: 'user' | 'assistant' | 'system';
     content: string;
     agent?: string;
 }
@@ -149,10 +149,11 @@ const ChatComponent = ({ app, settings }: { app: any, settings: any }) => {
                 noteContent = await app.vault.read(activeFile);
             }
 
+            const vaultPath = app.vault.adapter instanceof FileSystemAdapter ? app.vault.adapter.getBasePath() : '';
             let endpoint = `http://127.0.0.1:${settings.serverPort}/chat`;
             let body: any = {
                 message: originalInput,
-                vault_path: app.vault.adapter.getBasePath(),
+                vault_path: vaultPath,
                 active_note_content: noteContent,
                 agent_role: currentAgent,
                 mode: currentMode
@@ -166,17 +167,17 @@ const ChatComponent = ({ app, settings }: { app: any, settings: any }) => {
                 endpoint = `http://127.0.0.1:${settings.serverPort}/blueprint/synergy`;
                 const cleanInput = originalInput.replace('/synergy ', '').replace(/[\[\]]/g, '');
                 const topics = cleanInput.split(',').map(s => s.trim());
-                body = { topics, vault_path: app.vault.adapter.getBasePath() };
+                body = { topics, vault_path: vaultPath };
             } else if (originalInput.startsWith('/explore ')) {
                 endpoint = `http://127.0.0.1:${settings.serverPort}/blueprint/explore`;
                 const cleanInput = originalInput.replace('/explore ', '').replace(/[\[\]]/g, '');
                 const topics = cleanInput.split(',').map(s => s.trim());
-                body = { topics, vault_path: app.vault.adapter.getBasePath() };
+                body = { topics, vault_path: vaultPath };
             } else if (originalInput.startsWith('/ask ')) {
                 endpoint = `http://127.0.0.1:${settings.serverPort}/blueprint/ask`;
                 
                 let cleanInput = originalInput.replace('/ask ', '').trim();
-                let targetPath = null;
+                let targetPath: string | null = null;
                 // Parse optional target: /ask [folder/file] question
                 const match = cleanInput.match(/^\[(.*?)\]\s*(.*)/);
                 if (match) {
@@ -186,12 +187,12 @@ const ChatComponent = ({ app, settings }: { app: any, settings: any }) => {
                 
                 body = { 
                     message: cleanInput, 
-                    vault_path: app.vault.adapter.getBasePath(),
+                    vault_path: vaultPath,
                     target_path: targetPath
                 };
             } else if (originalInput === '/organize') {
                 endpoint = `http://127.0.0.1:${settings.serverPort}/blueprint/organize`;
-                // No message needed, vault_path is sent in the body already
+                body = { vault_path: vaultPath };
             }
 
             const response = await fetch(endpoint, {

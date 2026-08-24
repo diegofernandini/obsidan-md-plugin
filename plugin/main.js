@@ -21850,10 +21850,11 @@ var ChatComponent = ({ app, settings }) => {
       if (activeFile instanceof import_obsidian.TFile) {
         noteContent = await app.vault.read(activeFile);
       }
+      const vaultPath = app.vault.adapter instanceof import_obsidian.FileSystemAdapter ? app.vault.adapter.getBasePath() : "";
       let endpoint = `http://127.0.0.1:${settings.serverPort}/chat`;
       let body = {
         message: originalInput,
-        vault_path: app.vault.adapter.getBasePath(),
+        vault_path: vaultPath,
         active_note_content: noteContent,
         agent_role: currentAgent,
         mode: currentMode
@@ -21865,12 +21866,12 @@ var ChatComponent = ({ app, settings }) => {
         endpoint = `http://127.0.0.1:${settings.serverPort}/blueprint/synergy`;
         const cleanInput = originalInput.replace("/synergy ", "").replace(/[\[\]]/g, "");
         const topics = cleanInput.split(",").map((s) => s.trim());
-        body = { topics, vault_path: app.vault.adapter.getBasePath() };
+        body = { topics, vault_path: vaultPath };
       } else if (originalInput.startsWith("/explore ")) {
         endpoint = `http://127.0.0.1:${settings.serverPort}/blueprint/explore`;
         const cleanInput = originalInput.replace("/explore ", "").replace(/[\[\]]/g, "");
         const topics = cleanInput.split(",").map((s) => s.trim());
-        body = { topics, vault_path: app.vault.adapter.getBasePath() };
+        body = { topics, vault_path: vaultPath };
       } else if (originalInput.startsWith("/ask ")) {
         endpoint = `http://127.0.0.1:${settings.serverPort}/blueprint/ask`;
         let cleanInput = originalInput.replace("/ask ", "").trim();
@@ -21882,11 +21883,12 @@ var ChatComponent = ({ app, settings }) => {
         }
         body = {
           message: cleanInput,
-          vault_path: app.vault.adapter.getBasePath(),
+          vault_path: vaultPath,
           target_path: targetPath
         };
       } else if (originalInput === "/organize") {
         endpoint = `http://127.0.0.1:${settings.serverPort}/blueprint/organize`;
+        body = { vault_path: vaultPath };
       }
       const response = await fetch(endpoint, {
         method: "POST",
@@ -21906,17 +21908,10 @@ var ChatComponent = ({ app, settings }) => {
       if (reader) {
         while (true) {
           const { done, value } = await reader.read();
-          if (done) {
-            buffer += decoder.decode();
-            if (buffer.trim()) {
-              buffer += "\n\n";
-            }
-          }
-          if (!done) {
-            buffer += decoder.decode(value, { stream: true });
-          }
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split("\n");
-          buffer = done ? "" : lines.pop() || "";
+          buffer = lines.pop() || "";
           for (let rawLine of lines) {
             rawLine = rawLine.replace(/\r$/, "");
             if (rawLine.startsWith("data:")) {
@@ -21964,7 +21959,6 @@ var ChatComponent = ({ app, settings }) => {
               }
             }
           }
-          if (done) break;
         }
       }
     } catch (err) {
@@ -22417,10 +22411,10 @@ var ChatComponent = ({ app, settings }) => {
                 currentMode === "local" && currentAgent.includes("Visionario") && "\u{1F4A1}",
                 currentMode === "web" && "\u{1F310}",
                 currentMode === "hybrid" && "\u{1F91D}",
-                currentMode === "blueprint" && "\u{1F4DA}"
+                currentMode === "blueprint" && "\u{1F5FA}\uFE0F"
               ] }),
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", { style: { margin: "0 0 10px 0", color: "var(--text-normal)" }, children: currentMode === "local" ? "Interrogatorio Local" : currentMode === "web" ? "Investigaci\xF3n Aut\xF3noma" : currentMode === "hybrid" ? "An\xE1lisis H\xEDbrido 360" : "Blueprints MI-AI" }),
-              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { style: { fontSize: "0.9em", maxWidth: "85%", lineHeight: 1.45 }, children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", { style: { margin: "0 0 10px 0", color: "var(--text-normal)" }, children: currentMode === "local" ? "Interrogatorio Local" : currentMode === "web" ? "Investigaci\xF3n Aut\xF3noma" : currentMode === "hybrid" ? "An\xE1lisis H\xEDbrido 360" : "Ejecuci\xF3n Multi-Agente" }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { style: { fontSize: "0.9em", maxWidth: "80%" }, children: [
                 currentMode === "local" && currentAgent.includes("Detective") && "Extraer\xE9 datos y hechos precisos desde el contexto de tus notas locales sin interpretaci\xF3n.",
                 currentMode === "local" && currentAgent.includes("Editor") && "Tomar\xE9 tus notas y redactar\xE9 un nuevo resumen ejecutivo coherente y con narrativa.",
                 currentMode === "local" && currentAgent.includes("Cr\xEDtico") && "Buscar\xE9 brechas de informaci\xF3n t\xE9cnica y contradicciones ocultas en tus recortes.",
@@ -22511,32 +22505,14 @@ var ChatComponent = ({ app, settings }) => {
         borderRadius: "4px",
         color: "var(--text-muted)"
       }, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "\u{1F52E} Blueprints" }),
-        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", { style: { margin: "6px 0 8px 0", paddingLeft: "16px", lineHeight: 1.5 }, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "/explore [c1, c2, \u2026]" }),
-            " \u2014 ",
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "exploraci\xF3n literaria multi-concepto" }),
-            " (2\u20135 t\xE9rminos separados por comas). B\xFAsqueda por ejes acad\xE9micos, informe y guardado en ",
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "MI-AI Reports" }),
-            "."
-          ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "/roadmap [tema]" }),
-            " \u2014 roadmap de investigaci\xF3n (local + web)."
-          ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "/synergy [tema1, tema2]" }),
-            " \u2014 matriz de sinergias (vault + web por tema)."
-          ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "\u{1F52E} Blueprints:" }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", { style: { margin: "4px 0", paddingLeft: "16px" }, children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "/roadmap [tema]" }) }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "/synergy [tema1, tema2]" }) }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "/organize" }),
-            " \u2014 organiza el vault de forma incremental."
+            " \u2014 organiza todo el vault (incremental)"
           ] })
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { fontSize: "0.92em", color: "var(--text-normal)", opacity: 0.9 }, children: [
-          "Ejemplo: ",
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "/explore quantitative modeling, microstructures, finance" })
         ] })
       ] }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: {
@@ -22555,7 +22531,7 @@ var ChatComponent = ({ app, settings }) => {
             value: input,
             onChange: (e) => setInput(e.target.value),
             onKeyDown: (e) => e.key === "Enter" && handleSend(),
-            placeholder: currentMode === "blueprint" ? "/explore concepto1, concepto2, concepto3" : "...",
+            placeholder: "...",
             style: {
               flex: 1,
               background: "transparent",
