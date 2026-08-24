@@ -1,4 +1,11 @@
-from langchain_ollama import ChatOllama
+try:
+    from langchain_ollama import ChatOllama
+except ImportError:
+    try:
+        from langchain_community.chat_models import ChatOllama
+    except ImportError:
+        ChatOllama = None
+
 from typing import List, Dict, Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -12,11 +19,16 @@ class AgentManager:
         # Asegúrate de tener el modelo especificado (ej: llama2, mistral) ejecutándose en Ollama.
         print(f"Inicializando el motor de IA con Ollama usando el modelo: {model_name}")
         try:
-            self.llm = ChatOllama(model=model_name)
+            if ChatOllama is not None:
+                self.llm = ChatOllama(model=model_name)
+            else:
+                print("❌ ERROR: Ni 'langchain_ollama' ni 'langchain_community' están instalados en este entorno Python.")
+                self.llm = None
         except Exception as e:
             print(f"❌ ERROR al inicializar Ollama: {e}")
             print("Asegúrate de que Ollama está corriendo en segundo plano y el modelo ('llama2' por defecto) ha sido descargado con 'ollama pull llama2'")
             self.llm = None
+
 
     async def stream_agent_task(self, role: str, system_prompt: str, context: str, task: str):
         """Generador asíncrono para streaming del LLM."""

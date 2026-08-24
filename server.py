@@ -2,6 +2,9 @@ import os
 import sys
 if sys.stdout.encoding.lower() != 'utf-8':
     sys.stdout.reconfigure(encoding='utf-8')
+
+import src.auto_venv
+
 import json
 import asyncio
 import time
@@ -14,6 +17,9 @@ from sse_starlette.sse import EventSourceResponse
 from src.data_ingestor import DataIngestor
 from src.agent_manager import AgentManager
 from src.blueprint_engine import BlueprintEngine
+from src.a2a.protocol import A2AMessage, A2APerformative, AgentCard
+from src.a2a.router import A2AMessageRouter
+from src.a2a.orchestrator import A2APipelineOrchestrator
 
 app = FastAPI(title="MI-AI Brain Server")
 
@@ -31,6 +37,9 @@ app.add_middleware(
 MODEL_NAME = "llama3.2:1b"
 ingestor = DataIngestor()
 agent_manager = AgentManager(model_name=MODEL_NAME)
+a2a_router = A2AMessageRouter()
+a2a_orchestrator = A2APipelineOrchestrator(router=a2a_router, agent_manager=agent_manager)
+
 
 async def save_to_vault(vault_path: str, title: str, content: str, transcript: Optional[str] = None):
     """Guarda un reporte en el vault de Obsidian. Si se proporciona transcript, lo incrusta al final."""
@@ -135,6 +144,68 @@ class ChatRequest(BaseModel):
 @app.get("/health")
 async def health():
     return {"status": "ok", "model": MODEL_NAME}
+
+@app.get("/.well-known/agent.json")
+async def get_agent_manifest():
+    """A2A Agent Manifest Discovery Endpoint."""
+    registered_cards = a2a_router.list_agents()
+    return {
+        "agent_id": "mi-ai-orchestrator",
+        "name": "MI-AI Knowledge System A2A Gateway",
+        "protocol_version": "1.0",
+        "description": "Multi-agent research pipelines orchestrator over local vault & web sources.",
+        "endpoints": {
+            "trigger": "/a2a/v1/trigger"
+        },
+        "registered_sub_agents": [card.model_dump() for card in registered_cards]
+    }
+
+@app.post("/a2a/v1/trigger")
+async def trigger_a2a_action(message: A2AMessage) -> A2AMessage:
+    """
+    Standard A2A Protocol Trigger Endpoint.
+    Accepts an incoming A2AMessage envelope from external or internal agents,
+    routes it to the target capability or pipeline, and returns the result envelope.
+    """
+    action = message.action
+    payload = message.payload
+    
+    if action == "run_roadmap":
+        topic = payload.get("topic", "")
+        vault_path = payload.get("vault_path")
+        
+        local_context = ""
+        if vault_path:
+            texts = ingestor.load_local_data(vault_path)
+            if texts:
+                ingestor.index_data(texts, "LOCAL", "roadmap_index")
+                retriever = ingestor.get_retriever()
+                docs = retriever.invoke(topic)
+                local_context = "\n".join([d.page_content for d in docs])
+                
+        queries = agent_manager.generate_search_queries(topic)
+        web_results = ingestor.get_combined_research(queries)
+        selected_web = agent_manager.select_best_sources(web_results, topic)
+        web_contents = [ingestor.scrape_url(s['url']) for s in selected_web]
+        combined_context = f"--- CONTEXTO LOCAL ---\n{local_context}\n\n--- CONTEXTO WEB ---\n" + "\n".join(web_contents)
+        
+        result = await a2a_orchestrator.run_roadmap_pipeline(topic, combined_context, selected_web)
+        
+        if vault_path:
+            await save_to_vault(vault_path, f"A2A_Roadmap_{topic}", result["report"])
+
+        return A2AMessage(
+            session_id=message.session_id,
+            sender_id="mi-ai-orchestrator",
+            receiver_id=message.sender_id,
+            performative=A2APerformative.INFORM,
+            action="run_roadmap_completed",
+            payload={"report": result["report"], "topic": topic},
+            metadata={"reply_to": message.message_id}
+        )
+    
+    return await a2a_router.send_message(message)
+
 
 @app.post("/index-vault")
 async def index_vault(request: Request):

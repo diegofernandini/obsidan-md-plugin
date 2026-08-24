@@ -14,15 +14,24 @@ import os
 import sys
 from typing import List, Optional
 
-# Ensure project root is on sys.path when launched as an absolute script path
+import glob
+
+# Ensure project root is on sys.path
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
+# If launched by system python, re-exec using local venv python interpreter
+_VENV_PYTHON = os.path.join(_ROOT, "venv", "bin", "python")
+if os.path.exists(_VENV_PYTHON) and os.path.realpath(sys.executable) != os.path.realpath(_VENV_PYTHON):
+    os.execv(_VENV_PYTHON, [_VENV_PYTHON] + sys.argv)
+
 from mcp.server.fastmcp import Context, FastMCP
+
 
 from src.agent_manager import AgentManager
 from src.data_ingestor import DataIngestor
+
 from src import pipeline_runners as runners
 from src.output_writer import attach_output
 
